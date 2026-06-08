@@ -121,6 +121,8 @@ struct Item: Identifiable {
     // Jira issues have no server "read" state, so "seen" is local and keyed on
     // the issue's updated timestamp: dismissing hides it until the issue changes.
     var version: String? = nil
+    // When the notification last changed, used to show "5h ago" in the caption.
+    var updatedAt: Date? = nil
 
     var displaySymbol: String {
         if let status { return status.symbol }
@@ -131,10 +133,25 @@ struct Item: Identifiable {
         status?.tint ?? .secondary
     }
 
-    // Small context line under the title: GitHub's reason, else the status words.
+    // Small context line under the title: GitHub's reason, else the status words,
+    // suffixed with how long ago the notification last changed ("review requested 5h ago").
     var caption: String? {
-        reason ?? status?.label
+        let base = reason ?? status?.label
+        guard let base else { return updatedAt.map(relativeAge) }
+        guard let updatedAt else { return base }
+        return "\(base) \(relativeAge(updatedAt))"
     }
+}
+
+// Compact "time ago" suffix: "just now", "5m ago", "5h ago", "3d ago", "2w ago".
+func relativeAge(_ date: Date) -> String {
+    let elapsed = max(0, Date().timeIntervalSince(date))
+    let minute = 60.0, hour = 3600.0, day = 86400.0, week = 604800.0
+    if elapsed < minute { return "just now" }
+    if elapsed < hour { return "\(Int(elapsed / minute))m ago" }
+    if elapsed < day { return "\(Int(elapsed / hour))h ago" }
+    if elapsed < week { return "\(Int(elapsed / day))d ago" }
+    return "\(Int(elapsed / week))w ago"
 }
 
 func friendlyGitHubReason(_ raw: String) -> String {
@@ -225,6 +242,13 @@ struct GHThread: Identifiable, Decodable {
     let subject: Subject
     let repository: Repository
     let reason: String
+    let updated_at: String?
+
+    var updatedAt: Date? {
+        updated_at.flatMap { GHThread.timestampFormatter.date(from: $0) }
+    }
+
+    static let timestampFormatter = ISO8601DateFormatter()
 
     struct Subject: Decodable {
         let title: String
@@ -282,7 +306,7 @@ final class GitHubAdapter: NotificationAdapter {
                              canMarkRead: true,
                              reference: thread.webURL.flatMap { Int($0.lastPathComponent) }.map { "#\($0)" },
                              reason: friendlyGitHubReason(thread.reason),
-                             status: nil, avatarURL: nil)
+                             status: nil, avatarURL: nil, updatedAt: thread.updatedAt)
                     }
                     completion(.success(items))
                 } catch {
@@ -452,7 +476,8 @@ final class JiraAdapter: NotificationAdapter {
                                  url: URL(string: "https://\(self.jira.site)/browse/\(issue.key)"),
                                  actionId: issue.key, kind: .other, canMarkRead: true,
                                  reference: issue.key,
-                                 status: nil, avatarURL: nil, version: issue.fields.updated)
+                                 status: nil, avatarURL: nil, version: issue.fields.updated,
+                                 updatedAt: Self.parse(issue.fields.updated))
                         }
                     completion(.success(items))
                 } catch {
