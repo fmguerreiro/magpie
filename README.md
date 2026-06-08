@@ -35,11 +35,37 @@ config (default `magpie-jira`):
 security add-generic-password -a "you@example.com" -s magpie-jira -w 'YOUR_JIRA_API_TOKEN' -U
 ```
 
-## Build and run
+## Build and install
 
 ```
-swift build -c release
+make install      # build Magpie.app and install it to ~/Applications
 ```
 
-To run as a proper menu-bar agent (no Dock icon), wrap the binary in an app
-bundle with `LSUIElement` set, then `open` it.
+Other targets:
+
+```
+make app          # assemble dist/Magpie.app (build + bundle + icon + ad-hoc sign)
+make dmg          # package dist/Magpie.dmg for handing to another machine
+make icon         # regenerate AppIcon.icns from scripts/make-icon.swift
+make build        # compile the release binary only
+make clean
+```
+
+## Installing on another Mac
+
+`make dmg` produces `dist/Magpie.dmg`; open it and drag Magpie to Applications.
+
+The app is **ad-hoc signed**, not notarized, so a Mac that didn't build it will
+quarantine it on first launch ("Magpie can't be opened because Apple cannot
+check it for malicious software"). Clear it one of two ways:
+
+- Right-click the app in Finder, choose **Open**, then **Open** again; or
+- `xattr -dr com.apple.quarantine /Applications/Magpie.app`
+
+For friction-free distribution you'd sign with an Apple **Developer ID**
+certificate and notarize (`xcrun notarytool submit` + `xcrun stapler staple`),
+which needs a paid Apple Developer account. The build script's `codesign -s -`
+line is where a real signing identity would slot in.
+
+Each machine also needs the runtime prerequisites above (`gh` authenticated,
+`jira-cli` initialized + Keychain token) and its own `~/.config/magpie/config.json`.
