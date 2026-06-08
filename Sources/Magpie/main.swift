@@ -374,10 +374,12 @@ struct JiraListIssue: Decodable {
 
 struct JiraIssueDetail: Decodable {
     let fields: Fields
+    let changelog: Changelog?
 
     struct Fields: Decodable {
         let status: Status?
         let assignee: User?
+        let comment: CommentBlock?
 
         struct Status: Decodable {
             let name: String?
@@ -387,6 +389,26 @@ struct JiraIssueDetail: Decodable {
 
         struct User: Decodable {
             let avatarUrls: [String: String]?
+        }
+
+        struct CommentBlock: Decodable {
+            let comments: [Comment]
+            struct Comment: Decodable {
+                let created: String?
+                let updated: String?
+            }
+        }
+    }
+
+    struct Changelog: Decodable {
+        let histories: [History]
+        struct History: Decodable {
+            let created: String?
+            let items: [ChangeItem]
+            struct ChangeItem: Decodable {
+                let field: String?
+                let toString: String?
+            }
         }
     }
 }
@@ -442,10 +464,20 @@ final class JiraAdapter: NotificationAdapter {
         }
     }
 
+    // jira-cli's --raw can't expand the changelog, so enrich goes straight to the
+    // REST API (same Keychain token, basic auth) to also learn what last happened.
     func enrich(_ item: Item, completion: @escaping (Item) -> Void) {
-        guard let env = tokenEnv else { return }
-        runCommand(jiraPath, ["issue", "view", item.actionId, "--raw"], env: env) { result in
-            guard case .success(let data) = result,
+        guard let token,
+              let url = URL(string: "https://\(jira.site)/rest/api/3/issue/\(item.actionId)?expand=changelog&fields=status,assignee,comment")
+        else { return }
+
+        var request = URLRequest(url: url)
+        let credentials = Data("\(jira.email):\(token)".utf8).base64EncodedString()
+        request.setValue("Basic \(credentials)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data,
                   let detail = try? JSONDecoder().decode(JiraIssueDetail.self, from: data) else { return }
             var updated = item
             updated.status = Self.status(categoryKey: detail.fields.status?.statusCategory?.key,
@@ -453,8 +485,44 @@ final class JiraAdapter: NotificationAdapter {
             if let avatar = detail.fields.assignee?.avatarUrls?["48x48"] {
                 updated.avatarURL = URL(string: avatar)
             }
-            completion(updated)
+            updated.reason = Self.activity(from: detail)
+            DispatchQueue.main.async { completion(updated) }
+        }.resume()
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        return formatter
+    }()
+
+    private static func parse(_ value: String?) -> Date? {
+        value.flatMap { timestampFormatter.date(from: $0) }
+    }
+
+    // Most recent of (last comment, last changelog entry) wins; describe it.
+    private static func activity(from detail: JiraIssueDetail) -> String? {
+        let lastComment = detail.fields.comment?.comments.last
+        let commentDate = parse(lastComment?.updated ?? lastComment?.created)
+        let lastHistory = detail.changelog?.histories.last
+        let historyDate = parse(lastHistory?.created)
+
+        if let commentDate, historyDate == nil || commentDate >= historyDate! {
+            return "new comment"
         }
+        if let lastHistory {
+            if let status = lastHistory.items.first(where: { $0.field == "status" }) {
+                return "moved to \(status.toString ?? "new status")"
+            }
+            if lastHistory.items.contains(where: { $0.field == "assignee" }) {
+                return "reassigned"
+            }
+            if let field = lastHistory.items.first?.field {
+                return "\(field) updated"
+            }
+        }
+        return commentDate != nil ? "new comment" : nil
     }
 
     func markRead(_ item: Item) {
