@@ -112,6 +112,8 @@ struct Item: Identifiable {
     let actionId: String
     let kind: SubjectKind
     let canMarkRead: Bool
+    // Why this notification reached you (GitHub: review_requested/mention/...).
+    var reason: String? = nil
     var status: ThreadStatus?
     var avatarURL: URL?
     // Jira issues have no server "read" state, so "seen" is local and keyed on
@@ -125,6 +127,27 @@ struct Item: Identifiable {
 
     var displayTint: Color {
         status?.tint ?? .secondary
+    }
+
+    // Small context line under the title: GitHub's reason, else the status words.
+    var caption: String? {
+        reason ?? status?.label
+    }
+}
+
+func friendlyGitHubReason(_ raw: String) -> String {
+    switch raw {
+    case "review_requested": return "review requested"
+    case "mention": return "mentioned you"
+    case "team_mention": return "team mentioned"
+    case "assign": return "assigned to you"
+    case "author": return "you opened this"
+    case "comment": return "new comment"
+    case "state_change": return "state changed"
+    case "subscribed", "manual": return "subscribed"
+    case "ci_activity": return "CI activity"
+    case "security_alert": return "security alert"
+    default: return raw.replacingOccurrences(of: "_", with: " ")
     }
 }
 
@@ -199,6 +222,7 @@ struct GHThread: Identifiable, Decodable {
     let id: String
     let subject: Subject
     let repository: Repository
+    let reason: String
 
     struct Subject: Decodable {
         let title: String
@@ -253,7 +277,8 @@ final class GitHubAdapter: NotificationAdapter {
                         Item(id: "gh:\(thread.id)", source: .github,
                              group: thread.repository.full_name, title: thread.subject.title,
                              url: thread.webURL, actionId: thread.id, kind: thread.kind,
-                             canMarkRead: true, status: nil, avatarURL: nil)
+                             canMarkRead: true, reason: friendlyGitHubReason(thread.reason),
+                             status: nil, avatarURL: nil)
                     }
                     completion(.success(items))
                 } catch {
@@ -572,10 +597,17 @@ struct ItemRow: View {
             Button {
                 store.open(item)
             } label: {
-                Text(item.title)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    if let caption = item.caption {
+                        Text(caption)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
 
