@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to ~/.config/magpie/config.json and fill in. ghPath/jiraPath are optional; if omitted the app probes ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, /usr/bin. Omit the whole 'jira' block to run GitHub-only.",
+  "ghPath": "/opt/homebrew/bin/gh",
+  "jiraPath": "/opt/homebrew/bin/jira",
+  "jira": {
+    "site": "your-site.atlassian.net",
+    "email": "you@example.com",
+    "keychainService": "magpie-jira",
+    "jql": "(assignee = currentUser() AND statusCategory != Done) OR (watcher = currentUser() AND updated >= -7d) OR (reporter = currentUser() AND statusCategory != Done)"
+  }
+}

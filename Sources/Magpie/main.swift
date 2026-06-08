@@ -1,0 +1,733 @@
+import AppKit
+import SwiftUI
+
+let securityPath = "/usr/bin/security"
+
+// Approximation of "assigned + mentions + watched": Jira has no currentUser()
+// mention operator, so this covers assigned-and-open, watched, and reported.
+// No trailing ORDER BY — jira-cli appends its own ordering and a second one 400s.
+let defaultJiraJQL = "(assignee = currentUser() AND statusCategory != Done) OR (watcher = currentUser() AND updated >= -7d) OR (reporter = currentUser() AND statusCategory != Done)"
+
+// Personal paths and Jira identity live in a config file outside the repo so the
+// source can be shared. See config.example.json. Absent Jira block => GitHub only.
+struct AppConfig {
+    let ghPath: String
+    let jiraPath: String
+    let jira: JiraConfig?
+
+    struct JiraConfig {
+        let site: String
+        let email: String
+        let keychainService: String
+        let jql: String
+    }
+
+    private struct Raw: Decodable {
+        var ghPath: String?
+        var jiraPath: String?
+        var jira: RawJira?
+        struct RawJira: Decodable {
+            var site: String
+            var email: String
+            var keychainService: String?
+            var jql: String?
+        }
+    }
+
+    static func load() -> AppConfig {
+        let path = NSString(string: "~/.config/magpie/config.json").expandingTildeInPath
+        let raw = (try? Data(contentsOf: URL(fileURLWithPath: path)))
+            .flatMap { try? JSONDecoder().decode(Raw.self, from: $0) }
+
+        let jira = raw?.jira.map {
+            JiraConfig(site: $0.site, email: $0.email,
+                       keychainService: $0.keychainService ?? "magpie-jira",
+                       jql: $0.jql ?? defaultJiraJQL)
+        }
+        return AppConfig(
+            ghPath: raw?.ghPath ?? resolveBinary("gh") ?? "/usr/local/bin/gh",
+            jiraPath: raw?.jiraPath ?? resolveBinary("jira") ?? "/opt/homebrew/bin/jira",
+            jira: jira
+        )
+    }
+
+    // Finder-launched apps get a minimal PATH, so probe the usual install dirs.
+    private static func resolveBinary(_ name: String) -> String? {
+        let home = NSHomeDirectory()
+        let candidates = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+        return candidates
+            .map { "\($0)/\(name)" }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+}
+
+let config = AppConfig.load()
+let ghPath = config.ghPath
+let jiraPath = config.jiraPath
+
+enum Source {
+    case github
+    case jira
+}
+
+enum SubjectKind {
+    case pullRequest, issue, discussion, commit, release, other
+
+    init(_ raw: String) {
+        switch raw {
+        case "PullRequest": self = .pullRequest
+        case "Issue": self = .issue
+        case "Discussion": self = .discussion
+        case "Commit": self = .commit
+        case "Release": self = .release
+        default: self = .other
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .pullRequest: return "arrow.triangle.pull"
+        case .issue: return "smallcircle.filled.circle"
+        case .discussion: return "bubble.left.and.bubble.right"
+        case .commit: return "arrow.triangle.branch"
+        case .release: return "tag"
+        case .other: return "bell"
+        }
+    }
+}
+
+struct ThreadStatus {
+    let label: String
+    let symbol: String
+    let tint: Color
+}
+
+// Normalized notification item shared across adapters.
+struct Item: Identifiable {
+    let id: String
+    let source: Source
+    let group: String
+    let title: String
+    let url: URL?
+    let actionId: String
+    let kind: SubjectKind
+    let canMarkRead: Bool
+    var status: ThreadStatus?
+    var avatarURL: URL?
+    // Jira issues have no server "read" state, so "seen" is local and keyed on
+    // the issue's updated timestamp: dismissing hides it until the issue changes.
+    var version: String? = nil
+
+    var displaySymbol: String {
+        if let status { return status.symbol }
+        return source == .github ? kind.symbol : "smallcircle.filled.circle"
+    }
+
+    var displayTint: Color {
+        status?.tint ?? .secondary
+    }
+}
+
+// MARK: - Subprocess helper
+
+func runCommand(_ executable: String, _ arguments: [String], env: [String: String]? = nil,
+                completion: @escaping (Result<Data, Error>) -> Void) {
+    DispatchQueue.global(qos: .userInitiated).async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        if let env {
+            var merged = ProcessInfo.processInfo.environment
+            for (key, value) in env { merged[key] = value }
+            process.environment = merged
+        }
+        let output = Pipe()
+        let errors = Pipe()
+        process.standardOutput = output
+        process.standardError = errors
+        do {
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            let errorData = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            if process.terminationStatus == 0 {
+                DispatchQueue.main.async { completion(.success(data)) }
+            } else {
+                let message = String(data: errorData, encoding: .utf8) ?? "exit \(process.terminationStatus)"
+                let error = NSError(domain: executable, code: Int(process.terminationStatus),
+                                    userInfo: [NSLocalizedDescriptionKey: message])
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        } catch {
+            DispatchQueue.main.async { completion(.failure(error)) }
+        }
+    }
+}
+
+func runCommandSync(_ executable: String, _ arguments: [String]) -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = Pipe()
+    do {
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let value = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        return value
+    } catch {
+        return nil
+    }
+}
+
+// MARK: - Adapter protocol
+
+protocol NotificationAdapter {
+    var source: Source { get }
+    func load(completion: @escaping (Result<[Item], Error>) -> Void)
+    func enrich(_ item: Item, completion: @escaping (Item) -> Void)
+    func markRead(_ item: Item)
+}
+
+// MARK: - GitHub
+
+struct GHThread: Identifiable, Decodable {
+    let id: String
+    let subject: Subject
+    let repository: Repository
+
+    struct Subject: Decodable {
+        let title: String
+        let url: String?
+        let type: String
+    }
+
+    struct Repository: Decodable {
+        let full_name: String
+        let html_url: String
+    }
+
+    var kind: SubjectKind { SubjectKind(subject.type) }
+
+    var webURL: URL? {
+        let raw = subject.url ?? repository.html_url
+        let web = raw
+            .replacingOccurrences(of: "https://api.github.com/repos", with: "https://github.com")
+            .replacingOccurrences(of: "/pulls/", with: "/pull/")
+            .replacingOccurrences(of: "/commits/", with: "/commit/")
+        return URL(string: web)
+    }
+}
+
+struct GHAuthor: Decodable {
+    let login: String
+}
+
+struct GHPullRequestInfo: Decodable {
+    let state: String
+    let isDraft: Bool
+    let reviewDecision: String?
+    let author: GHAuthor?
+}
+
+struct GHIssueInfo: Decodable {
+    let state: String
+    let stateReason: String?
+    let author: GHAuthor?
+}
+
+final class GitHubAdapter: NotificationAdapter {
+    let source = Source.github
+
+    func load(completion: @escaping (Result<[Item], Error>) -> Void) {
+        runCommand(ghPath, ["api", "notifications"]) { result in
+            switch result {
+            case .success(let data):
+                do {
+                    let threads = try JSONDecoder().decode([GHThread].self, from: data)
+                    let items = threads.map { thread in
+                        Item(id: "gh:\(thread.id)", source: .github,
+                             group: thread.repository.full_name, title: thread.subject.title,
+                             url: thread.webURL, actionId: thread.id, kind: thread.kind,
+                             canMarkRead: true, status: nil, avatarURL: nil)
+                    }
+                    completion(.success(items))
+                } catch {
+                    completion(.failure(error))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func enrich(_ item: Item, completion: @escaping (Item) -> Void) {
+        guard let url = item.url?.absoluteString else { return }
+        switch item.kind {
+        case .pullRequest:
+            runCommand(ghPath, ["pr", "view", url, "--json", "state,isDraft,reviewDecision,author"]) { result in
+                guard case .success(let data) = result,
+                      let info = try? JSONDecoder().decode(GHPullRequestInfo.self, from: data) else { return }
+                var updated = item
+                updated.status = Self.status(forPullRequest: info)
+                if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
+                completion(updated)
+            }
+        case .issue:
+            runCommand(ghPath, ["issue", "view", url, "--json", "state,stateReason,author"]) { result in
+                guard case .success(let data) = result,
+                      let info = try? JSONDecoder().decode(GHIssueInfo.self, from: data) else { return }
+                var updated = item
+                updated.status = Self.status(forIssue: info)
+                if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
+                completion(updated)
+            }
+        default:
+            break
+        }
+    }
+
+    func markRead(_ item: Item) {
+        runCommand(ghPath, ["api", "--method", "PATCH", "/notifications/threads/\(item.actionId)"]) { _ in }
+    }
+
+    private static func avatarURL(_ login: String) -> URL? {
+        URL(string: "https://github.com/\(login).png?size=48")
+    }
+
+    private static func status(forPullRequest info: GHPullRequestInfo) -> ThreadStatus {
+        switch info.state.uppercased() {
+        case "MERGED":
+            return ThreadStatus(label: "merged", symbol: "arrow.triangle.merge", tint: .purple)
+        case "CLOSED":
+            return ThreadStatus(label: "closed", symbol: "xmark.circle.fill", tint: .red)
+        default:
+            if info.isDraft {
+                return ThreadStatus(label: "draft", symbol: "circle.dashed", tint: .gray)
+            }
+            switch (info.reviewDecision ?? "").uppercased() {
+            case "CHANGES_REQUESTED":
+                return ThreadStatus(label: "changes requested", symbol: "exclamationmark.bubble.fill", tint: .orange)
+            case "APPROVED":
+                return ThreadStatus(label: "approved", symbol: "checkmark.seal.fill", tint: .green)
+            default:
+                return ThreadStatus(label: "open", symbol: "arrow.triangle.pull", tint: .green)
+            }
+        }
+    }
+
+    private static func status(forIssue info: GHIssueInfo) -> ThreadStatus {
+        if info.state.uppercased() == "OPEN" {
+            return ThreadStatus(label: "open", symbol: "smallcircle.filled.circle", tint: .green)
+        }
+        if (info.stateReason ?? "").uppercased() == "NOT_PLANNED" {
+            return ThreadStatus(label: "closed", symbol: "slash.circle.fill", tint: .gray)
+        }
+        return ThreadStatus(label: "closed", symbol: "checkmark.circle.fill", tint: .purple)
+    }
+}
+
+// MARK: - Jira
+
+struct JiraListIssue: Decodable {
+    let key: String
+    let fields: Fields
+
+    struct Fields: Decodable {
+        let summary: String
+        let updated: String?
+    }
+}
+
+struct JiraIssueDetail: Decodable {
+    let fields: Fields
+
+    struct Fields: Decodable {
+        let status: Status?
+        let assignee: User?
+
+        struct Status: Decodable {
+            let name: String?
+            let statusCategory: Category?
+            struct Category: Decodable { let key: String? }
+        }
+
+        struct User: Decodable {
+            let avatarUrls: [String: String]?
+        }
+    }
+}
+
+final class JiraAdapter: NotificationAdapter {
+    let source = Source.jira
+    private let jira: AppConfig.JiraConfig
+    private let token: String?
+    private let seenKey = "jiraSeen"
+    private var seen: [String: String]
+
+    init(_ jira: AppConfig.JiraConfig) {
+        self.jira = jira
+        token = runCommandSync(securityPath,
+                               ["find-generic-password", "-a", jira.email, "-s", jira.keychainService, "-w"])
+        seen = (UserDefaults.standard.dictionary(forKey: seenKey) as? [String: String]) ?? [:]
+    }
+
+    private var tokenEnv: [String: String]? {
+        guard let token else { return nil }
+        return ["JIRA_API_TOKEN": token]
+    }
+
+    func load(completion: @escaping (Result<[Item], Error>) -> Void) {
+        guard let env = tokenEnv else {
+            completion(.failure(NSError(domain: "jira", code: 1,
+                                        userInfo: [NSLocalizedDescriptionKey: "no Jira token in Keychain"])))
+            return
+        }
+        runCommand(jiraPath, ["issue", "list", "-q", jira.jql, "--raw"], env: env) { result in
+            switch result {
+            case .success(let data):
+                do {
+                    let issues = try JSONDecoder().decode([JiraListIssue].self, from: data)
+                    let items = issues
+                        .filter { self.seen[$0.key] != ($0.fields.updated ?? "") }
+                        .map { issue in
+                            Item(id: "jira:\(issue.key)", source: .jira,
+                                 group: "\(issue.key.split(separator: "-").first.map(String.init) ?? "Jira") · Jira",
+                                 title: issue.fields.summary,
+                                 url: URL(string: "https://\(self.jira.site)/browse/\(issue.key)"),
+                                 actionId: issue.key, kind: .other, canMarkRead: true,
+                                 status: nil, avatarURL: nil, version: issue.fields.updated)
+                        }
+                    completion(.success(items))
+                } catch {
+                    completion(.failure(error))
+                }
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func enrich(_ item: Item, completion: @escaping (Item) -> Void) {
+        guard let env = tokenEnv else { return }
+        runCommand(jiraPath, ["issue", "view", item.actionId, "--raw"], env: env) { result in
+            guard case .success(let data) = result,
+                  let detail = try? JSONDecoder().decode(JiraIssueDetail.self, from: data) else { return }
+            var updated = item
+            updated.status = Self.status(categoryKey: detail.fields.status?.statusCategory?.key,
+                                         name: detail.fields.status?.name)
+            if let avatar = detail.fields.assignee?.avatarUrls?["48x48"] {
+                updated.avatarURL = URL(string: avatar)
+            }
+            completion(updated)
+        }
+    }
+
+    func markRead(_ item: Item) {
+        seen[item.actionId] = item.version ?? ""
+        UserDefaults.standard.set(seen, forKey: seenKey)
+    }
+
+    private static func status(categoryKey: String?, name: String?) -> ThreadStatus {
+        let label = name ?? "—"
+        switch categoryKey {
+        case "done":
+            return ThreadStatus(label: label, symbol: "checkmark.circle.fill", tint: .green)
+        case "indeterminate":
+            return ThreadStatus(label: label, symbol: "circle.lefthalf.filled", tint: .blue)
+        default:
+            return ThreadStatus(label: label, symbol: "circle", tint: .gray)
+        }
+    }
+}
+
+// MARK: - Store
+
+final class Store: ObservableObject {
+    @Published var items: [Item] = []
+    @Published var errorMessage: String?
+    @Published var loading = false
+
+    private let adapters: [NotificationAdapter]
+    private var timer: Timer?
+
+    init(adapters: [NotificationAdapter]) {
+        self.adapters = adapters
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
+    // GitHub groups first, then Jira; alphabetical within each.
+    var grouped: [(group: String, items: [Item])] {
+        let groups = Dictionary(grouping: items, by: { $0.group })
+        return groups.keys.sorted { left, right in
+            let leftJira = groups[left]?.first?.source == .jira
+            let rightJira = groups[right]?.first?.source == .jira
+            if leftJira != rightJira { return !leftJira }
+            return left < right
+        }.map { (group: $0, items: groups[$0] ?? []) }
+    }
+
+    private func adapter(for source: Source) -> NotificationAdapter? {
+        adapters.first { $0.source == source }
+    }
+
+    func refresh() {
+        loading = true
+        let group = DispatchGroup()
+        var collected: [Item] = []
+        var firstError: Error?
+        for adapter in adapters {
+            group.enter()
+            adapter.load { result in
+                switch result {
+                case .success(let items):
+                    collected.append(contentsOf: items)
+                case .failure(let error):
+                    if firstError == nil { firstError = error }
+                }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            self.items = collected
+            self.errorMessage = firstError?.localizedDescription
+            self.loading = false
+            self.enrichAll()
+        }
+    }
+
+    private func enrichAll() {
+        for item in items {
+            adapter(for: item.source)?.enrich(item) { [weak self] updated in
+                guard let self, let index = self.items.firstIndex(where: { $0.id == updated.id }) else { return }
+                self.items[index] = updated
+            }
+        }
+    }
+
+    func markRead(_ item: Item) {
+        guard item.canMarkRead else { return }
+        items.removeAll { $0.id == item.id }
+        adapter(for: item.source)?.markRead(item)
+    }
+
+    func markGroupRead(_ group: String) {
+        let toMark = items.filter { $0.group == group && $0.canMarkRead }
+        items.removeAll { $0.group == group && $0.canMarkRead }
+        for item in toMark { adapter(for: item.source)?.markRead(item) }
+    }
+
+    func markAllRead() {
+        let toMark = items.filter { $0.canMarkRead }
+        items.removeAll { $0.canMarkRead }
+        for item in toMark { adapter(for: item.source)?.markRead(item) }
+    }
+
+    var hasReadableItems: Bool {
+        items.contains { $0.canMarkRead }
+    }
+
+    func open(_ item: Item) {
+        guard let url = item.url else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Views
+
+struct ItemRow: View {
+    let item: Item
+    @ObservedObject var store: Store
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            ZStack(alignment: .bottomTrailing) {
+                AsyncImage(url: item.avatarURL) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Circle().fill(Color.secondary.opacity(0.2))
+                }
+                .frame(width: 22, height: 22)
+                .clipShape(Circle())
+
+                Image(systemName: item.displaySymbol)
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(item.displayTint)
+                    .padding(2)
+                    .background(Circle().fill(Color(NSColor.windowBackgroundColor)))
+                    .offset(x: 3, y: 3)
+            }
+            .frame(width: 22, height: 22)
+            .padding(.top, 1)
+            .help(item.status?.label ?? "")
+
+            Button {
+                store.open(item)
+            } label: {
+                Text(item.title)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            if item.canMarkRead {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        store.markRead(item)
+                    }
+                } label: {
+                    Image(systemName: "checkmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Mark as read")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(hovering ? Color.primary.opacity(0.06) : Color.clear)
+        .onHover { hovering = $0 }
+    }
+}
+
+struct ContentView: View {
+    @ObservedObject var store: Store
+
+    @State private var measuredHeight: CGFloat = 0
+    private let maxListHeight: CGFloat = 460
+
+    private var listHeight: CGFloat {
+        let height = measuredHeight > 0 ? measuredHeight : 120
+        return min(height, maxListHeight)
+    }
+
+    private func groupHasReadable(_ items: [Item]) -> Bool {
+        items.contains { $0.canMarkRead }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Notifications").font(.headline)
+                Spacer()
+                if store.loading {
+                    ProgressView().controlSize(.small)
+                }
+                Button {
+                    store.refresh()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.plain)
+                .help("Refresh")
+            }
+            .padding(10)
+
+            Divider()
+
+            if let errorMessage = store.errorMessage, store.items.isEmpty {
+                Text(errorMessage)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .padding(10)
+            }
+
+            if store.items.isEmpty {
+                Text(store.loading ? "Loading…" : "Nothing to show")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(20)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(store.grouped, id: \.group) { group in
+                            HStack {
+                                Text(group.group)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                if groupHasReadable(group.items) {
+                                    Button("clear") {
+                                        withAnimation(.easeInOut(duration: 0.25)) {
+                                            store.markGroupRead(group.group)
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+
+                            ForEach(group.items) { item in
+                                ItemRow(item: item, store: store)
+                                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                            }
+                        }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { proxy in
+                        proxy.size.height
+                    } action: { newHeight in
+                        measuredHeight = newHeight
+                    }
+                }
+                .frame(height: listHeight)
+            }
+
+            Divider()
+
+            HStack {
+                Button("Mark all as read") {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        store.markAllRead()
+                    }
+                }
+                .disabled(!store.hasReadableItems)
+                Spacer()
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+            .padding(10)
+        }
+        .frame(width: 380)
+    }
+}
+
+func makeAdapters() -> [NotificationAdapter] {
+    var adapters: [NotificationAdapter] = [GitHubAdapter()]
+    if let jira = config.jira {
+        adapters.append(JiraAdapter(jira))
+    }
+    return adapters
+}
+
+struct MagpieApp: App {
+    @StateObject private var store = Store(adapters: makeAdapters())
+
+    var body: some Scene {
+        MenuBarExtra {
+            ContentView(store: store)
+        } label: {
+            let count = store.items.count
+            Image(systemName: count == 0 ? "bell" : "bell.badge")
+            if count > 0 {
+                Text("\(count)")
+            }
+        }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+MagpieApp.main()
