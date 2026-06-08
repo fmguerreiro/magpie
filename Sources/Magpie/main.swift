@@ -112,6 +112,8 @@ struct Item: Identifiable {
     let actionId: String
     let kind: SubjectKind
     let canMarkRead: Bool
+    // "#34" for GitHub PRs/issues, "PF-117" for Jira.
+    var reference: String? = nil
     // Why this notification reached you (GitHub: review_requested/mention/...).
     var reason: String? = nil
     var status: ThreadStatus?
@@ -277,7 +279,9 @@ final class GitHubAdapter: NotificationAdapter {
                         Item(id: "gh:\(thread.id)", source: .github,
                              group: thread.repository.full_name, title: thread.subject.title,
                              url: thread.webURL, actionId: thread.id, kind: thread.kind,
-                             canMarkRead: true, reason: friendlyGitHubReason(thread.reason),
+                             canMarkRead: true,
+                             reference: thread.webURL.flatMap { Int($0.lastPathComponent) }.map { "#\($0)" },
+                             reason: friendlyGitHubReason(thread.reason),
                              status: nil, avatarURL: nil)
                     }
                     completion(.success(items))
@@ -425,6 +429,7 @@ final class JiraAdapter: NotificationAdapter {
                                  title: issue.fields.summary,
                                  url: URL(string: "https://\(self.jira.site)/browse/\(issue.key)"),
                                  actionId: issue.key, kind: .other, canMarkRead: true,
+                                 reference: issue.key,
                                  status: nil, avatarURL: nil, version: issue.fields.updated)
                         }
                     completion(.success(items))
@@ -572,6 +577,11 @@ struct ItemRow: View {
     @ObservedObject var store: Store
     @State private var hovering = false
 
+    private var titleText: Text {
+        guard let reference = item.reference else { return Text(item.title) }
+        return Text(reference).foregroundColor(.secondary) + Text("  ") + Text(item.title)
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
@@ -598,7 +608,7 @@ struct ItemRow: View {
                 store.open(item)
             } label: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title)
+                    titleText
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     if let caption = item.caption {
