@@ -721,7 +721,7 @@ struct MagpieApp: App {
             ContentView(store: store)
         } label: {
             let count = store.items.count
-            Image(systemName: count == 0 ? "bell" : "bell.badge")
+            Image(systemName: count == 0 ? "bird" : "bird.fill")
             if count > 0 {
                 Text("\(count)")
             }
