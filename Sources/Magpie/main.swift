@@ -123,6 +123,11 @@ struct Item: Identifiable {
     var version: String? = nil
     // When the notification last changed, used to show "5h ago" in the caption.
     var updatedAt: Date? = nil
+    // GitHub's raw reason ("mention", "comment", ...), kept so enrich can decide
+    // whether to resolve the actor behind the latest comment.
+    var rawReason: String? = nil
+    // GitHub API URL of the comment that triggered this notification, if any.
+    var latestCommentURL: String? = nil
 
     var displaySymbol: String {
         if let status { return status.symbol }
@@ -254,6 +259,7 @@ struct GHThread: Identifiable, Decodable {
         let title: String
         let url: String?
         let type: String
+        let latest_comment_url: String?
     }
 
     struct Repository: Decodable {
@@ -275,6 +281,10 @@ struct GHThread: Identifiable, Decodable {
 
 struct GHAuthor: Decodable {
     let login: String
+}
+
+struct GHComment: Decodable {
+    let user: GHAuthor
 }
 
 struct GHPullRequestInfo: Decodable {
@@ -306,7 +316,9 @@ final class GitHubAdapter: NotificationAdapter {
                              canMarkRead: true,
                              reference: thread.webURL.flatMap { Int($0.lastPathComponent) }.map { "#\($0)" },
                              reason: friendlyGitHubReason(thread.reason),
-                             status: nil, avatarURL: nil, updatedAt: thread.updatedAt)
+                             status: nil, avatarURL: nil, updatedAt: thread.updatedAt,
+                             rawReason: thread.reason,
+                             latestCommentURL: thread.subject.latest_comment_url)
                     }
                     completion(.success(items))
                 } catch {
@@ -328,7 +340,7 @@ final class GitHubAdapter: NotificationAdapter {
                 var updated = item
                 updated.status = Self.status(forPullRequest: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                completion(updated)
+                self.resolveActor(updated, completion: completion)
             }
         case .issue:
             runCommand(ghPath, ["issue", "view", url, "--json", "state,stateReason,author"]) { result in
@@ -337,10 +349,43 @@ final class GitHubAdapter: NotificationAdapter {
                 var updated = item
                 updated.status = Self.status(forIssue: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                completion(updated)
+                self.resolveActor(updated, completion: completion)
             }
         default:
             break
+        }
+    }
+
+    // For mention/comment notifications, name the person behind the triggering
+    // comment ("octocat mentioned you") and show their avatar instead of the
+    // PR/issue author's. Other reasons pass through untouched.
+    private static let actorReasons: Set<String> = ["mention", "team_mention", "comment"]
+
+    private func resolveActor(_ item: Item, completion: @escaping (Item) -> Void) {
+        guard let raw = item.rawReason, Self.actorReasons.contains(raw),
+              let commentURL = item.latestCommentURL else {
+            completion(item)
+            return
+        }
+        runCommand(ghPath, ["api", commentURL]) { result in
+            guard case .success(let data) = result,
+                  let comment = try? JSONDecoder().decode(GHComment.self, from: data) else {
+                completion(item)
+                return
+            }
+            var updated = item
+            updated.reason = Self.actorReason(raw, login: comment.user.login)
+            updated.avatarURL = Self.avatarURL(comment.user.login)
+            completion(updated)
+        }
+    }
+
+    private static func actorReason(_ raw: String, login: String) -> String {
+        switch raw {
+        case "mention": return "\(login) mentioned you"
+        case "team_mention": return "\(login) mentioned your team"
+        case "comment": return "\(login) commented"
+        default: return friendlyGitHubReason(raw)
         }
     }
 
@@ -1023,11 +1068,11 @@ struct DemoAdapter: NotificationAdapter {
            status: ThreadStatus(label: "merged", symbol: "arrow.triangle.merge", tint: .purple),
            login: "mojombo", age: 3 * 3600),
         gh("#51", "acme/api", "Add per-route rate limiting", kind: .pullRequest,
-           reason: "mentioned you",
+           reason: "octocat mentioned you",
            status: ThreadStatus(label: "closed", symbol: "xmark.circle.fill", tint: .red),
            login: "octocat", age: 6 * 3600),
         gh("#44", "acme/api", "Race condition in worker pool", kind: .issue,
-           reason: "mentioned you",
+           reason: "kelseyhightower mentioned you",
            status: ThreadStatus(label: "open", symbol: "smallcircle.filled.circle", tint: .green),
            login: "kelseyhightower", age: 35 * 60),
         gh("#40", "acme/api", "Memory leak on reconnect", kind: .issue,
