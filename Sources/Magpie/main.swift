@@ -39,10 +39,13 @@ struct AppConfig {
 
         private static func matches(_ patterns: [String], _ fullName: String) -> Bool {
             let name = fullName.lowercased()
-            let owner = name.split(separator: "/").first.map(String.init)
+            let parts = name.split(separator: "/", maxSplits: 1)
+            let owner = parts.count == 2 ? String(parts[0]) : nil
             return patterns.contains { pattern in
                 let pattern = pattern.lowercased()
-                return pattern == name || pattern == owner || pattern == owner.map { "\($0)/*" }
+                if pattern == name { return true }
+                guard let owner else { return false }
+                return pattern == owner || pattern == "\(owner)/*"
             }
         }
     }
