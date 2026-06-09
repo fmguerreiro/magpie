@@ -825,6 +825,45 @@ struct GroupIcon: View {
     }
 }
 
+// Group header bar shared by the live ContentView and the static SnapshotView.
+// Pass clearAction to render the interactive "clear" button; omit it (nil) for
+// the snapshot, which renders the label statically since ImageRenderer can't
+// host a tappable control.
+struct GroupHeader: View {
+    let group: String
+    let items: [Item]
+    let clearAction: (() -> Void)?
+
+    private var hasReadable: Bool {
+        items.contains { $0.canMarkRead }
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            GroupIcon(group: group, source: items.first?.source ?? .github)
+            Text(group)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            Spacer()
+            if hasReadable {
+                if let clearAction {
+                    Button("clear", action: clearAction)
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("clear")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+    }
+}
+
 struct ItemRow: View {
     let item: Item
     @ObservedObject var store: Store
@@ -915,10 +954,6 @@ struct ContentView: View {
         return min(height, maxListHeight)
     }
 
-    private func groupHasReadable(_ items: [Item]) -> Bool {
-        items.contains { $0.canMarkRead }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -955,27 +990,11 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(store.grouped, id: \.group) { group in
-                            HStack(spacing: 5) {
-                                GroupIcon(group: group.group,
-                                          source: group.items.first?.source ?? .github)
-                                Text(group.group)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if groupHasReadable(group.items) {
-                                    Button("clear") {
-                                        withAnimation(.easeInOut(duration: 0.25)) {
-                                            store.markGroupRead(group.group)
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            GroupHeader(group: group.group, items: group.items) {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    store.markGroupRead(group.group)
                                 }
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.top, 8)
-                            .padding(.bottom, 2)
 
                             ForEach(group.items) { item in
                                 ItemRow(item: item, store: store)
@@ -1024,10 +1043,6 @@ var demoAvatarCache: [URL: NSImage] = [:]
 struct SnapshotView: View {
     @ObservedObject var store: Store
 
-    private func groupHasReadable(_ items: [Item]) -> Bool {
-        items.contains { $0.canMarkRead }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -1041,22 +1056,7 @@ struct SnapshotView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(store.grouped, id: \.group) { group in
-                    HStack(spacing: 5) {
-                        GroupIcon(group: group.group,
-                                  source: group.items.first?.source ?? .github)
-                        Text(group.group)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if groupHasReadable(group.items) {
-                            Text("clear")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.top, 8)
-                    .padding(.bottom, 2)
+                    GroupHeader(group: group.group, items: group.items, clearAction: nil)
 
                     ForEach(group.items) { item in
                         ItemRow(item: item, store: store)
