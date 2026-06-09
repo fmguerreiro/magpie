@@ -336,7 +336,11 @@ final class GitHubAdapter: NotificationAdapter {
         case .pullRequest:
             runCommand(ghPath, ["pr", "view", url, "--json", "state,isDraft,reviewDecision,author"]) { result in
                 guard case .success(let data) = result,
-                      let info = try? JSONDecoder().decode(GHPullRequestInfo.self, from: data) else { return }
+                      let info = try? JSONDecoder().decode(GHPullRequestInfo.self, from: data) else {
+                    // State fetch failed; still try to name the mentioner.
+                    self.resolveActor(item, completion: completion)
+                    return
+                }
                 var updated = item
                 updated.status = Self.status(forPullRequest: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
@@ -345,13 +349,17 @@ final class GitHubAdapter: NotificationAdapter {
         case .issue:
             runCommand(ghPath, ["issue", "view", url, "--json", "state,stateReason,author"]) { result in
                 guard case .success(let data) = result,
-                      let info = try? JSONDecoder().decode(GHIssueInfo.self, from: data) else { return }
+                      let info = try? JSONDecoder().decode(GHIssueInfo.self, from: data) else {
+                    self.resolveActor(item, completion: completion)
+                    return
+                }
                 var updated = item
                 updated.status = Self.status(forIssue: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
                 self.resolveActor(updated, completion: completion)
             }
         default:
+            // Commits, releases, discussions etc. carry no PR/issue state to enrich.
             break
         }
     }
@@ -367,6 +375,7 @@ final class GitHubAdapter: NotificationAdapter {
             completion(item)
             return
         }
+        // gh api accepts a full https://api.github.com/... URL as the path arg.
         runCommand(ghPath, ["api", commentURL]) { result in
             guard case .success(let data) = result,
                   let comment = try? JSONDecoder().decode(GHComment.self, from: data) else {
