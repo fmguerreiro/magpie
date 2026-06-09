@@ -1,9 +1,15 @@
-# Magpie
+<p align="center">
+  <img src="icon-1024.png" alt="Magpie" width="160" height="160">
+</p>
 
-A macOS menu-bar notification aggregator. Pulls items from multiple sources
-into one popover, grouped by source, with type/state icons, author avatars, and
-per-row dismiss. Built on SwiftUI `MenuBarExtra` (`.window` style), so the
-popover stays open and updates in place.
+<h1 align="center">Magpie</h1>
+
+<p align="center">A macOS menu-bar notification aggregator.</p>
+
+Pulls items from multiple sources into one popover, grouped by source, with
+type/state icons, author avatars, and per-row dismiss. Built on SwiftUI
+`MenuBarExtra` (`.window` style), so the popover stays open and updates in
+place.
 
 Sources are adapters. Two ship today:
 
