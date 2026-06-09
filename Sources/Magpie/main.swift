@@ -753,8 +753,10 @@ struct GroupIcon: View {
     let source: Source
 
     static func orgAvatarURL(for group: String, source: Source) -> URL? {
-        guard source == .github, let org = group.split(separator: "/").first else { return nil }
-        return URL(string: "https://github.com/\(org).png?size=48")
+        guard source == .github else { return nil }
+        let parts = group.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2 else { return nil }
+        return URL(string: "https://github.com/\(parts[0]).png?size=48")
     }
 
     @ViewBuilder private var content: some View {
@@ -1045,8 +1047,9 @@ func renderSnapshot(to path: String) {
     application.setActivationPolicy(.accessory)
     application.appearance = NSAppearance(named: .aqua)
 
-    var avatarURLs = Set(DemoAdapter.items.compactMap { $0.avatarURL })
+    var avatarURLs = Set<URL>()
     for item in DemoAdapter.items {
+        if let url = item.avatarURL { avatarURLs.insert(url) }
         if let orgURL = GroupIcon.orgAvatarURL(for: item.group, source: item.source) {
             avatarURLs.insert(orgURL)
         }
