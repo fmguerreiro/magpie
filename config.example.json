@@ -2,6 +2,11 @@
   "_comment": "Copy to ~/.config/magpie/config.json and fill in. ghPath/jiraPath are optional; if omitted the app probes ~/.local/bin, /opt/homebrew/bin, /usr/local/bin, /usr/bin. Omit the whole 'jira' block to run GitHub-only.",
   "ghPath": "/opt/homebrew/bin/gh",
   "jiraPath": "/opt/homebrew/bin/jira",
+  "github": {
+    "_comment": "Optional repo/org filter. Patterns match 'owner', 'owner/*', or 'owner/repo' (case-insensitive). With 'include', only matching repos show; 'exclude' hides repos; on conflict include wins. Omit the block to show everything.",
+    "include": [],
+    "exclude": ["some-org"]
+  },
   "jira": {
     "site": "your-site.atlassian.net",
     "email": "you@example.com",

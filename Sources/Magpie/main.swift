@@ -14,6 +14,7 @@ struct AppConfig {
     let ghPath: String
     let jiraPath: String
     let jira: JiraConfig?
+    let github: GitHubFilter
 
     struct JiraConfig {
         let site: String
@@ -22,15 +23,44 @@ struct AppConfig {
         let jql: String
     }
 
+    // Repo/org filter for GitHub notifications. Patterns match "owner",
+    // "owner/*", or "owner/repo" (case-insensitive). With an include list, only
+    // matching repos show; exclude hides repos. On conflict, include wins.
+    struct GitHubFilter {
+        let include: [String]
+        let exclude: [String]
+
+        func allows(_ fullName: String) -> Bool {
+            let included = Self.matches(include, fullName)
+            if !include.isEmpty && !included { return false }
+            if Self.matches(exclude, fullName) && !included { return false }
+            return true
+        }
+
+        private static func matches(_ patterns: [String], _ fullName: String) -> Bool {
+            let name = fullName.lowercased()
+            let owner = name.split(separator: "/").first.map(String.init)
+            return patterns.contains { pattern in
+                let pattern = pattern.lowercased()
+                return pattern == name || pattern == owner || pattern == owner.map { "\($0)/*" }
+            }
+        }
+    }
+
     private struct Raw: Decodable {
         var ghPath: String?
         var jiraPath: String?
         var jira: RawJira?
+        var github: RawGitHub?
         struct RawJira: Decodable {
             var site: String
             var email: String
             var keychainService: String?
             var jql: String?
+        }
+        struct RawGitHub: Decodable {
+            var include: [String]?
+            var exclude: [String]?
         }
     }
 
@@ -47,7 +77,9 @@ struct AppConfig {
         return AppConfig(
             ghPath: raw?.ghPath ?? resolveBinary("gh") ?? "/usr/local/bin/gh",
             jiraPath: raw?.jiraPath ?? resolveBinary("jira") ?? "/opt/homebrew/bin/jira",
-            jira: jira
+            jira: jira,
+            github: GitHubFilter(include: raw?.github?.include ?? [],
+                                 exclude: raw?.github?.exclude ?? [])
         )
     }
 
@@ -309,7 +341,9 @@ final class GitHubAdapter: NotificationAdapter {
             case .success(let data):
                 do {
                     let threads = try JSONDecoder().decode([GHThread].self, from: data)
-                    let items = threads.map { thread in
+                    let items = threads
+                        .filter { config.github.allows($0.repository.full_name) }
+                        .map { thread in
                         Item(id: "gh:\(thread.id)", source: .github,
                              group: thread.repository.full_name, title: thread.subject.title,
                              url: thread.webURL, actionId: thread.id, kind: thread.kind,
