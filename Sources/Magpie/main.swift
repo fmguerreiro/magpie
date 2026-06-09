@@ -466,6 +466,7 @@ struct JiraIssueDetail: Decodable {
         }
 
         struct User: Decodable {
+            let displayName: String?
             let avatarUrls: [String: String]?
         }
 
@@ -474,6 +475,7 @@ struct JiraIssueDetail: Decodable {
             struct Comment: Decodable {
                 let created: String?
                 let updated: String?
+                let author: User?
             }
         }
     }
@@ -483,6 +485,7 @@ struct JiraIssueDetail: Decodable {
         struct History: Decodable {
             let created: String?
             let items: [ChangeItem]
+            let author: Fields.User?
             struct ChangeItem: Decodable {
                 let field: String?
                 let toString: String?
@@ -561,10 +564,14 @@ final class JiraAdapter: NotificationAdapter {
             var updated = item
             updated.status = Self.status(categoryKey: detail.fields.status?.statusCategory?.key,
                                          name: detail.fields.status?.name)
-            if let avatar = detail.fields.assignee?.avatarUrls?["48x48"] {
+            let activity = Self.activity(from: detail)
+            updated.reason = activity?.text
+            // Prefer the avatar of whoever last acted; fall back to the assignee.
+            if let actorAvatar = activity?.avatar {
+                updated.avatarURL = URL(string: actorAvatar)
+            } else if let avatar = detail.fields.assignee?.avatarUrls?["48x48"] {
                 updated.avatarURL = URL(string: avatar)
             }
-            updated.reason = Self.activity(from: detail)
             DispatchQueue.main.async { completion(updated) }
         }.resume()
     }
@@ -580,28 +587,40 @@ final class JiraAdapter: NotificationAdapter {
         value.flatMap { timestampFormatter.date(from: $0) }
     }
 
-    // Most recent of (last comment, last changelog entry) wins; describe it.
-    private static func activity(from detail: JiraIssueDetail) -> String? {
+    // Most recent of (last comment, last changelog entry) wins; describe it and
+    // name who did it ("Jane Doe commented"), with that person's avatar.
+    private static func activity(from detail: JiraIssueDetail) -> (text: String, avatar: String?)? {
         let lastComment = detail.fields.comment?.comments.last
         let commentDate = parse(lastComment?.updated ?? lastComment?.created)
         let lastHistory = detail.changelog?.histories.last
         let historyDate = parse(lastHistory?.created)
 
-        if let commentDate, historyDate == nil || commentDate >= historyDate! {
-            return "new comment"
+        let commentWins = commentDate != nil && (historyDate == nil || commentDate! >= historyDate!)
+        if commentWins, let author = lastComment?.author {
+            return (actorPhrase(author.displayName, "commented"), author.avatarUrls?["48x48"])
         }
         if let lastHistory {
+            let name = lastHistory.author?.displayName
+            let avatar = lastHistory.author?.avatarUrls?["48x48"]
             if let status = lastHistory.items.first(where: { $0.field == "status" }) {
-                return "moved to \(status.toString ?? "new status")"
+                return (actorPhrase(name, "moved to \(status.toString ?? "new status")"), avatar)
             }
             if lastHistory.items.contains(where: { $0.field == "assignee" }) {
-                return "reassigned"
+                return (actorPhrase(name, "reassigned"), avatar)
             }
             if let field = lastHistory.items.first?.field {
-                return "\(field) updated"
+                return (actorPhrase(name, "\(field) updated"), avatar)
             }
         }
-        return commentDate != nil ? "new comment" : nil
+        if let author = lastComment?.author, commentDate != nil {
+            return (actorPhrase(author.displayName, "commented"), author.avatarUrls?["48x48"])
+        }
+        return nil
+    }
+
+    private static func actorPhrase(_ name: String?, _ verb: String) -> String {
+        if let name, !name.isEmpty { return "\(name) \(verb)" }
+        return verb
     }
 
     func markRead(_ item: Item) {
@@ -1088,13 +1107,13 @@ struct DemoAdapter: NotificationAdapter {
            reason: "state changed",
            status: ThreadStatus(label: "closed", symbol: "checkmark.circle.fill", tint: .purple),
            login: "torvalds", age: 4 * 3600),
-        jira("PF-204", "Design new onboarding screens", reason: "new comment",
+        jira("PF-204", "Design new onboarding screens", reason: "Yuki Tanaka commented",
              status: ThreadStatus(label: "In Progress", symbol: "circle.lefthalf.filled", tint: .blue),
              login: "gaearon", age: 1 * 3600),
-        jira("PF-198", "Migrate billing to Stripe", reason: "reassigned",
+        jira("PF-198", "Migrate billing to Stripe", reason: "Sam Rivera reassigned",
              status: ThreadStatus(label: "To Do", symbol: "circle", tint: .gray),
              login: "octocat", age: 2 * 86400),
-        jira("PF-187", "Ship Q2 analytics dashboard", reason: "moved to Done",
+        jira("PF-187", "Ship Q2 analytics dashboard", reason: "Priya Nair moved to Done",
              status: ThreadStatus(label: "Done", symbol: "checkmark.circle.fill", tint: .green),
              login: "mojombo", age: 5 * 86400),
     ]
