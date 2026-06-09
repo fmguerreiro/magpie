@@ -485,7 +485,7 @@ struct JiraIssueDetail: Decodable {
         struct History: Decodable {
             let created: String?
             let items: [ChangeItem]
-            let author: Fields.User?
+            let author: JiraIssueDetail.Fields.User?
             struct ChangeItem: Decodable {
                 let field: String?
                 let toString: String?
@@ -595,9 +595,16 @@ final class JiraAdapter: NotificationAdapter {
         let lastHistory = detail.changelog?.histories.last
         let historyDate = parse(lastHistory?.created)
 
-        let commentWins = commentDate != nil && (historyDate == nil || commentDate! >= historyDate!)
-        if commentWins, let author = lastComment?.author {
-            return (actorPhrase(author.displayName, "commented"), author.avatarUrls?["48x48"])
+        let commentWins: Bool
+        if let commentDate {
+            commentWins = historyDate.map { commentDate >= $0 } ?? true
+        } else {
+            commentWins = false
+        }
+
+        if commentWins {
+            let author = lastComment?.author
+            return (actorPhrase(author?.displayName, "commented"), author?.avatarUrls?["48x48"])
         }
         if let lastHistory {
             let name = lastHistory.author?.displayName
@@ -612,8 +619,9 @@ final class JiraAdapter: NotificationAdapter {
                 return (actorPhrase(name, "\(field) updated"), avatar)
             }
         }
-        if let author = lastComment?.author, commentDate != nil {
-            return (actorPhrase(author.displayName, "commented"), author.avatarUrls?["48x48"])
+        if commentDate != nil {
+            let author = lastComment?.author
+            return (actorPhrase(author?.displayName, "commented"), author?.avatarUrls?["48x48"])
         }
         return nil
     }
