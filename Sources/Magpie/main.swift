@@ -675,16 +675,26 @@ struct ItemRow: View {
         return Text(reference).foregroundColor(.secondary) + Text("  ") + Text(item.title)
     }
 
+    // Prefetched avatars (demo/snapshot only) render synchronously; everything
+    // else streams over the network via AsyncImage.
+    @ViewBuilder private var avatarImage: some View {
+        if let url = item.avatarURL, let cached = demoAvatarCache[url] {
+            Image(nsImage: cached).resizable().scaledToFill()
+        } else {
+            AsyncImage(url: item.avatarURL) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                Circle().fill(Color.secondary.opacity(0.2))
+            }
+        }
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImage(url: item.avatarURL) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Circle().fill(Color.secondary.opacity(0.2))
-                }
-                .frame(width: 22, height: 22)
-                .clipShape(Circle())
+                avatarImage
+                    .frame(width: 22, height: 22)
+                    .clipShape(Circle())
 
                 Image(systemName: item.displaySymbol)
                     .font(.system(size: 9, weight: .bold))
@@ -840,7 +850,206 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Demo
+
+// Avatars decoded ahead of a synchronous snapshot render, keyed by source URL.
+// Empty in normal operation, so ItemRow falls back to AsyncImage.
+var demoAvatarCache: [URL: NSImage] = [:]
+
+// Static, non-scrolling mirror of ContentView for ImageRenderer. ContentView's
+// ScrollView clamps its own height, which would clip an off-screen render, so
+// the snapshot lays every row out at natural height instead.
+struct SnapshotView: View {
+    @ObservedObject var store: Store
+
+    private func groupHasReadable(_ items: [Item]) -> Bool {
+        items.contains { $0.canMarkRead }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Notifications").font(.headline)
+                Spacer()
+                Image(systemName: "arrow.clockwise").foregroundStyle(.secondary)
+            }
+            .padding(10)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(store.grouped, id: \.group) { group in
+                    HStack {
+                        Text(group.group)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if groupHasReadable(group.items) {
+                            Text("clear")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .padding(.bottom, 2)
+
+                    ForEach(group.items) { item in
+                        ItemRow(item: item, store: store)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack {
+                Text("Mark all as read")
+                Spacer()
+                Text("Quit")
+            }
+            .padding(10)
+        }
+        .frame(width: 380)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+}
+
+@MainActor
+func renderSnapshot(to path: String) {
+    let application = NSApplication.shared
+    application.setActivationPolicy(.accessory)
+    application.appearance = NSAppearance(named: .aqua)
+
+    for item in DemoAdapter.items {
+        guard let url = item.avatarURL else { continue }
+        if let data = try? Data(contentsOf: url), let image = NSImage(data: data) {
+            demoAvatarCache[url] = image
+        }
+    }
+
+    let store = Store(adapters: [DemoAdapter()])
+    let deadline = Date().addingTimeInterval(3)
+    while store.items.isEmpty && Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    }
+
+    let card = SnapshotView(store: store)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+        )
+        .padding(24)
+
+    let renderer = ImageRenderer(content: card)
+    renderer.scale = 2
+
+    guard let image = renderer.nsImage,
+          let tiff = image.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiff),
+          let png = bitmap.representation(using: .png, properties: [:]) else {
+        FileHandle.standardError.write(Data("snapshot render failed\n".utf8))
+        exit(1)
+    }
+    do {
+        try png.write(to: URL(fileURLWithPath: path))
+        print("wrote \(path)")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("snapshot write failed: \(error)\n".utf8))
+        exit(1)
+    }
+}
+
+// Canned, already-enriched items used for screenshots. Enabled with
+// MAGPIE_DEMO=1 so the popover renders every state without touching real
+// GitHub/Jira accounts. enrich/markRead are no-ops: the items arrive complete.
+struct DemoAdapter: NotificationAdapter {
+    let source = Source.github
+
+    func load(completion: @escaping (Result<[Item], Error>) -> Void) {
+        completion(.success(DemoAdapter.items))
+    }
+
+    func enrich(_ item: Item, completion: @escaping (Item) -> Void) {}
+    func markRead(_ item: Item) {}
+
+    private static func ago(_ seconds: TimeInterval) -> Date {
+        Date().addingTimeInterval(-seconds)
+    }
+
+    private static func avatar(_ login: String) -> URL? {
+        URL(string: "https://github.com/\(login).png")
+    }
+
+    private static func gh(_ ref: String, _ group: String, _ title: String,
+                           kind: SubjectKind, reason: String, status: ThreadStatus,
+                           login: String, age: TimeInterval) -> Item {
+        Item(id: "demo:\(group)\(ref)", source: .github, group: group, title: title,
+             url: URL(string: "https://github.com"), actionId: "demo:\(group)\(ref)",
+             kind: kind, canMarkRead: true, reference: ref, reason: reason,
+             status: status, avatarURL: avatar(login), updatedAt: ago(age))
+    }
+
+    private static func jira(_ key: String, _ title: String, reason: String,
+                             status: ThreadStatus, login: String, age: TimeInterval) -> Item {
+        let prefix = key.split(separator: "-").first.map(String.init) ?? "Jira"
+        return Item(id: "demo:\(key)", source: .jira, group: "\(prefix) · Jira",
+                    title: title, url: URL(string: "https://example.atlassian.net"),
+                    actionId: key, kind: .other, canMarkRead: true, reference: key,
+                    reason: reason, status: status, avatarURL: avatar(login),
+                    updatedAt: ago(age))
+    }
+
+    static let items: [Item] = [
+        gh("#128", "acme/webapp", "Add OAuth login flow", kind: .pullRequest,
+           reason: "review requested",
+           status: ThreadStatus(label: "open", symbol: "arrow.triangle.pull", tint: .green),
+           login: "octocat", age: 5 * 3600),
+        gh("#131", "acme/webapp", "Fix flaky checkout test", kind: .pullRequest,
+           reason: "you opened this",
+           status: ThreadStatus(label: "changes requested", symbol: "exclamationmark.bubble.fill", tint: .orange),
+           login: "torvalds", age: 2 * 3600),
+        gh("#119", "acme/webapp", "Bump dependencies to latest", kind: .pullRequest,
+           reason: "subscribed",
+           status: ThreadStatus(label: "approved", symbol: "checkmark.seal.fill", tint: .green),
+           login: "gaearon", age: 26 * 3600),
+        gh("#98", "acme/webapp", "Spike: websocket transport", kind: .pullRequest,
+           reason: "you opened this",
+           status: ThreadStatus(label: "draft", symbol: "circle.dashed", tint: .gray),
+           login: "defunkt", age: 3 * 86400),
+        gh("#117", "acme/api", "Refactor cache invalidation", kind: .pullRequest,
+           reason: "review requested",
+           status: ThreadStatus(label: "merged", symbol: "arrow.triangle.merge", tint: .purple),
+           login: "mojombo", age: 3 * 3600),
+        gh("#51", "acme/api", "Add per-route rate limiting", kind: .pullRequest,
+           reason: "mentioned you",
+           status: ThreadStatus(label: "closed", symbol: "xmark.circle.fill", tint: .red),
+           login: "octocat", age: 6 * 3600),
+        gh("#44", "acme/api", "Race condition in worker pool", kind: .issue,
+           reason: "mentioned you",
+           status: ThreadStatus(label: "open", symbol: "smallcircle.filled.circle", tint: .green),
+           login: "kelseyhightower", age: 35 * 60),
+        gh("#40", "acme/api", "Memory leak on reconnect", kind: .issue,
+           reason: "state changed",
+           status: ThreadStatus(label: "closed", symbol: "checkmark.circle.fill", tint: .purple),
+           login: "torvalds", age: 4 * 3600),
+        jira("PF-204", "Design new onboarding screens", reason: "new comment",
+             status: ThreadStatus(label: "In Progress", symbol: "circle.lefthalf.filled", tint: .blue),
+             login: "gaearon", age: 1 * 3600),
+        jira("PF-198", "Migrate billing to Stripe", reason: "reassigned",
+             status: ThreadStatus(label: "To Do", symbol: "circle", tint: .gray),
+             login: "octocat", age: 2 * 86400),
+        jira("PF-187", "Ship Q2 analytics dashboard", reason: "moved to Done",
+             status: ThreadStatus(label: "Done", symbol: "checkmark.circle.fill", tint: .green),
+             login: "mojombo", age: 5 * 86400),
+    ]
+}
+
 func makeAdapters() -> [NotificationAdapter] {
+    if ProcessInfo.processInfo.environment["MAGPIE_DEMO"] == "1" {
+        return [DemoAdapter()]
+    }
     var adapters: [NotificationAdapter] = [GitHubAdapter()]
     if let jira = config.jira {
         adapters.append(JiraAdapter(jira))
@@ -863,6 +1072,10 @@ struct MagpieApp: App {
         }
         .menuBarExtraStyle(.window)
     }
+}
+
+if let snapshotPath = ProcessInfo.processInfo.environment["MAGPIE_SHOT"] {
+    MainActor.assumeIsolated { renderSnapshot(to: snapshotPath) }
 }
 
 MagpieApp.main()

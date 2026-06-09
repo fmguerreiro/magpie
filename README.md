@@ -11,6 +11,10 @@ type/state icons, author avatars, and per-row dismiss. Built on SwiftUI
 `MenuBarExtra` (`.window` style), so the popover stays open and updates in
 place.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="Magpie popover" width="320">
+</p>
+
 Sources are adapters. Two ship today:
 
 - **GitHub** — unread notifications via the `gh` CLI (reuses existing auth; no
@@ -56,6 +60,20 @@ make icon         # regenerate AppIcon.icns from scripts/make-icon.swift
 make build        # compile the release binary only
 make clean
 ```
+
+## Regenerating the screenshot
+
+The screenshot above is rendered from canned demo data (no real accounts
+touched). `MAGPIE_DEMO=1` swaps in a fixed set of items covering every state;
+`MAGPIE_SHOT=<path>` renders the popover to a PNG and exits.
+
+```
+make build
+MAGPIE_DEMO=1 MAGPIE_SHOT="$PWD/docs/screenshot.png" .build/release/Magpie
+```
+
+Run `MAGPIE_DEMO=1 .build/release/Magpie` without `MAGPIE_SHOT` to drive the
+live menu-bar popover with the same demo data.
 
 ## Installing on another Mac
 
