@@ -746,6 +746,46 @@ final class Store: ObservableObject {
 
 // MARK: - Views
 
+// Leading glyph for a group header: the GitHub org's avatar (derived from the
+// "<org>/<repo>" group name), or a neutral mark for Jira (no org avatar).
+struct GroupIcon: View {
+    let group: String
+    let source: Source
+
+    static func orgAvatarURL(for group: String, source: Source) -> URL? {
+        guard source == .github, let org = group.split(separator: "/").first else { return nil }
+        return URL(string: "https://github.com/\(org).png?size=48")
+    }
+
+    @ViewBuilder private var content: some View {
+        if let url = Self.orgAvatarURL(for: group, source: source) {
+            if let cached = demoAvatarCache[url] {
+                Image(nsImage: cached).resizable().scaledToFill()
+            } else {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.2))
+                }
+            }
+        } else {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.secondary.opacity(0.15))
+                .overlay(
+                    Image(systemName: "diamond.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
+                )
+        }
+    }
+
+    var body: some View {
+        content
+            .frame(width: 14, height: 14)
+            .clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+}
+
 struct ItemRow: View {
     let item: Item
     @ObservedObject var store: Store
@@ -876,7 +916,9 @@ struct ContentView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(store.grouped, id: \.group) { group in
-                            HStack {
+                            HStack(spacing: 5) {
+                                GroupIcon(group: group.group,
+                                          source: group.items.first?.source ?? .github)
                                 Text(group.group)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -960,7 +1002,9 @@ struct SnapshotView: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(store.grouped, id: \.group) { group in
-                    HStack {
+                    HStack(spacing: 5) {
+                        GroupIcon(group: group.group,
+                                  source: group.items.first?.source ?? .github)
                         Text(group.group)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1001,8 +1045,13 @@ func renderSnapshot(to path: String) {
     application.setActivationPolicy(.accessory)
     application.appearance = NSAppearance(named: .aqua)
 
+    var avatarURLs = Set(DemoAdapter.items.compactMap { $0.avatarURL })
     for item in DemoAdapter.items {
-        guard let url = item.avatarURL else { continue }
+        if let orgURL = GroupIcon.orgAvatarURL(for: item.group, source: item.source) {
+            avatarURLs.insert(orgURL)
+        }
+    }
+    for url in avatarURLs {
         if let data = try? Data(contentsOf: url), let image = NSImage(data: data) {
             demoAvatarCache[url] = image
         }
@@ -1083,35 +1132,35 @@ struct DemoAdapter: NotificationAdapter {
     }
 
     static let items: [Item] = [
-        gh("#128", "acme/webapp", "Add OAuth login flow", kind: .pullRequest,
+        gh("#128", "vercel/webapp", "Add OAuth login flow", kind: .pullRequest,
            reason: "review requested",
            status: ThreadStatus(label: "open", symbol: "arrow.triangle.pull", tint: .green),
            login: "octocat", age: 5 * 3600),
-        gh("#131", "acme/webapp", "Fix flaky checkout test", kind: .pullRequest,
+        gh("#131", "vercel/webapp", "Fix flaky checkout test", kind: .pullRequest,
            reason: "you opened this",
            status: ThreadStatus(label: "changes requested", symbol: "exclamationmark.bubble.fill", tint: .orange),
            login: "torvalds", age: 2 * 3600),
-        gh("#119", "acme/webapp", "Bump dependencies to latest", kind: .pullRequest,
+        gh("#119", "vercel/webapp", "Bump dependencies to latest", kind: .pullRequest,
            reason: "subscribed",
            status: ThreadStatus(label: "approved", symbol: "checkmark.seal.fill", tint: .green),
            login: "gaearon", age: 26 * 3600),
-        gh("#98", "acme/webapp", "Spike: websocket transport", kind: .pullRequest,
+        gh("#98", "vercel/webapp", "Spike: websocket transport", kind: .pullRequest,
            reason: "you opened this",
            status: ThreadStatus(label: "draft", symbol: "circle.dashed", tint: .gray),
            login: "defunkt", age: 3 * 86400),
-        gh("#117", "acme/api", "Refactor cache invalidation", kind: .pullRequest,
+        gh("#117", "supabase/api", "Refactor cache invalidation", kind: .pullRequest,
            reason: "review requested",
            status: ThreadStatus(label: "merged", symbol: "arrow.triangle.merge", tint: .purple),
            login: "mojombo", age: 3 * 3600),
-        gh("#51", "acme/api", "Add per-route rate limiting", kind: .pullRequest,
+        gh("#51", "supabase/api", "Add per-route rate limiting", kind: .pullRequest,
            reason: "octocat mentioned you",
            status: ThreadStatus(label: "closed", symbol: "xmark.circle.fill", tint: .red),
            login: "octocat", age: 6 * 3600),
-        gh("#44", "acme/api", "Race condition in worker pool", kind: .issue,
+        gh("#44", "supabase/api", "Race condition in worker pool", kind: .issue,
            reason: "kelseyhightower mentioned you",
            status: ThreadStatus(label: "open", symbol: "smallcircle.filled.circle", tint: .green),
            login: "kelseyhightower", age: 35 * 60),
-        gh("#40", "acme/api", "Memory leak on reconnect", kind: .issue,
+        gh("#40", "supabase/api", "Memory leak on reconnect", kind: .issue,
            reason: "state changed",
            status: ThreadStatus(label: "closed", symbol: "checkmark.circle.fill", tint: .purple),
            login: "torvalds", age: 4 * 3600),
