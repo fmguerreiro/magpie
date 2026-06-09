@@ -804,15 +804,15 @@ struct GroupIcon: View {
                 AsyncImage(url: url) { image in
                     image.resizable().scaledToFill()
                 } placeholder: {
-                    RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.2))
+                    RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.2))
                 }
             }
         } else {
-            RoundedRectangle(cornerRadius: 3)
+            RoundedRectangle(cornerRadius: 4)
                 .fill(Color.secondary.opacity(0.15))
                 .overlay(
                     Image(systemName: "diamond.fill")
-                        .font(.system(size: 8))
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 )
         }
@@ -820,8 +820,8 @@ struct GroupIcon: View {
 
     var body: some View {
         content
-            .frame(width: 14, height: 14)
-            .clipShape(RoundedRectangle(cornerRadius: 3))
+            .frame(width: 18, height: 18)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 }
 
@@ -959,7 +959,7 @@ struct ContentView: View {
                                 GroupIcon(group: group.group,
                                           source: group.items.first?.source ?? .github)
                                 Text(group.group)
-                                    .font(.caption)
+                                    .font(.subheadline.weight(.medium))
                                     .foregroundStyle(.secondary)
                                 Spacer()
                                 if groupHasReadable(group.items) {
@@ -1045,7 +1045,7 @@ struct SnapshotView: View {
                         GroupIcon(group: group.group,
                                   source: group.items.first?.source ?? .github)
                         Text(group.group)
-                            .font(.caption)
+                            .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
                         Spacer()
                         if groupHasReadable(group.items) {
