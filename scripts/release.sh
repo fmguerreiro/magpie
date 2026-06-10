@@ -18,7 +18,8 @@ TAG="v$VERSION"
 branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$branch" = "main" ] || { echo "release from main (currently on $branch)" >&2; exit 1; }
 git fetch -q origin main
-[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD is not at origin/main — push or pull first" >&2; exit 1; }
+head="$(git rev-parse HEAD)"
+[ "$head" = "$(git rev-parse origin/main)" ] || { echo "HEAD is not at origin/main — push or pull first" >&2; exit 1; }
 
 REPO="fmguerreiro/magpie"
 TAP_DIR="${TAP_DIR:-../homebrew-tap}"
@@ -36,8 +37,11 @@ checksum="$(shasum -a 256 "$DMG" | awk '{print $1}')"
 # Idempotent: re-running after a mid-release failure re-uploads the asset
 # rather than dying on "release already exists".
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-    tagged="$(git ls-remote origin "refs/tags/$TAG" | awk '{print $1}')"
-    [ "$tagged" = "$(git rev-parse HEAD)" ] || { echo "release $TAG already exists at $tagged, not HEAD — delete it to re-release" >&2; exit 1; }
+    # Peel the tag to a commit so the check works for annotated and lightweight
+    # tags alike (GitHub's release API can create either).
+    git fetch -q origin "refs/tags/$TAG" || { echo "release $TAG exists but its tag is missing on the remote" >&2; exit 1; }
+    tagged="$(git rev-parse "FETCH_HEAD^{commit}")"
+    [ "$tagged" = "$head" ] || { echo "release $TAG already exists at $tagged, not HEAD — delete it to re-release" >&2; exit 1; }
     gh release upload "$TAG" "$DMG" --repo "$REPO" --clobber
 else
     gh release create "$TAG" "$DMG" --repo "$REPO" --title "$TAG" --generate-notes --target main
