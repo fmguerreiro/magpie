@@ -22,17 +22,22 @@ DMG="dist/Magpie.dmg"
 VERSION="$VERSION" ./scripts/build-app.sh
 ./scripts/make-dmg.sh
 
-git tag "$TAG"
-git push origin "$TAG"
-gh release create "$TAG" "$DMG" --repo "$REPO" --title "$TAG" --generate-notes
+# Hash the local artifact before any network/tag operation, so a failed
+# release leaves nothing half-published.
+checksum="$(shasum -a 256 "$DMG" | awk '{print $1}')"
 
-sha="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+# gh creates and pushes the tag (at main) together with the release, so there
+# is no window where a tag exists without its release.
+gh release create "$TAG" "$DMG" --repo "$REPO" --title "$TAG" --generate-notes --target main
 
-sed -i '' -E "s/^  version \".*\"/  version \"$VERSION\"/" "$CASK"
-sed -i '' -E "s/^  sha256 \".*\"/  sha256 \"$sha\"/" "$CASK"
+sed -i '' -E "s/^[[:space:]]*version \"[^\"]*\"/  version \"$VERSION\"/" "$CASK"
+sed -i '' -E "s/^[[:space:]]*sha256 \"[^\"]*\"/  sha256 \"$checksum\"/" "$CASK"
+
+grep -qF "version \"$VERSION\"" "$CASK" || { echo "cask version bump did not apply in $CASK" >&2; exit 1; }
+grep -qF "sha256 \"$checksum\"" "$CASK" || { echo "cask sha256 bump did not apply in $CASK" >&2; exit 1; }
 
 git -C "$TAP_DIR" add Casks/magpie.rb
 git -C "$TAP_DIR" commit -m "magpie $VERSION"
 git -C "$TAP_DIR" push
 
-echo "released $TAG and bumped cask to $VERSION ($sha)"
+echo "released $TAG and bumped cask to $VERSION ($checksum)"

@@ -37,6 +37,7 @@ icon:
 # Cut a release: build the DMG, publish a GitHub release, bump the Homebrew cask.
 # Pass the version: make release VERSION=0.1.0
 release:
+	@test -n "$(VERSION)" || { echo "VERSION is required, e.g. make release VERSION=0.1.0" >&2; exit 1; }
 	./scripts/release.sh $(VERSION)
 
 clean:
