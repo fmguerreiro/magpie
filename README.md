@@ -24,6 +24,27 @@ Sources are adapters. Two ship today:
   status category and assignee avatar. "Seen" is local (Jira has no per-issue
   read state): dismissing hides an issue until it next changes.
 
+## How it compares
+
+Most notification tools cover one slice. Magpie is the only one that combines
+GitHub notifications and Jira issues in a native macOS menu bar while reusing
+your existing `gh` and `jira-cli` logins, so there's no OAuth app to authorize
+and no token to paste into the app.
+
+| Tool | Sources | Platform | Auth | License | Price |
+|------|---------|----------|------|---------|-------|
+| **Magpie** | GitHub + Jira | macOS | Reuses `gh` / `jira-cli` | Open source | Free |
+| [Gitify](https://gitify.io) | GitHub (+ Enterprise, Gitea) | macOS / Windows / Linux | OAuth / PAT | Open source (MIT) | Free |
+| [JiraBar](https://github.com/menubar-apps/JiraBar) | Jira | macOS | Host + API token | Open source | Free |
+| [Octobox](https://octobox.io) | GitHub | Web (self-host) | GitHub OAuth | Open source (AGPL-3.0) | Free public repos; $10/user/mo private |
+| [CatLight](https://catlight.io) | Jira + GitHub (PRs/Actions) + CI | macOS / Windows / Linux | Per-service login | Proprietary | Free tier + paid |
+| [MergeHelper](https://mergehelper.com) | GitHub + GitLab (PRs/MRs) | macOS | PAT (Keychain) | Proprietary | $12 |
+
+Git-only menu-bar apps (Gitify, MergeHelper) never reach Jira; Jira-only apps
+(JiraBar) never reach GitHub; Octobox is a GitHub-only web app; and CatLight,
+the one multi-source rival, is proprietary and CI/CD-centric. Pricing is current
+as of June 2026.
+
 ## Requirements
 
 - macOS 13+
