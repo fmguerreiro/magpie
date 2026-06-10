@@ -6,7 +6,7 @@ build:
 
 # Assemble dist/Magpie.app (build + bundle + icon + ad-hoc sign).
 app:
-	./scripts/build-app.sh
+	VERSION="$${VERSION:-1.0}" ./scripts/build-app.sh
 
 # Package dist/Magpie.dmg for distribution.
 dmg: app

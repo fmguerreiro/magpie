@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="Magpie"
 BUNDLE_ID="com.filipeguerreiro.magpie"
-VERSION="${VERSION:-1.0}"
+VERSION="${VERSION:?VERSION is required (the Makefile targets and release.sh set it)}"
 BUILD="${BUILD:-1}"
 APP="dist/$APP_NAME.app"
 

@@ -3,7 +3,7 @@
 # then bumps version + sha256 in the Homebrew cask and pushes the tap.
 #
 # Usage: scripts/release.sh <version>      e.g. scripts/release.sh 0.1.0
-# The tap checkout location defaults to ../homebrew-tap; override with TAP_DIR.
+# Run from a main checkout; the tap defaults to ../homebrew-tap (TAP_DIR override).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -11,6 +11,11 @@ VERSION="${1:-}"
 [ -n "$VERSION" ] || { echo "usage: scripts/release.sh <version>  (e.g. 0.1.0)" >&2; exit 1; }
 VERSION="${VERSION#v}"
 TAG="v$VERSION"
+
+# The published tag points at main, so the working tree must be main to keep
+# the tagged commit and the built artifact in sync.
+branch="$(git rev-parse --abbrev-ref HEAD)"
+[ "$branch" = "main" ] || { echo "release from main (currently on $branch)" >&2; exit 1; }
 
 REPO="fmguerreiro/magpie"
 TAP_DIR="${TAP_DIR:-../homebrew-tap}"
@@ -22,16 +27,19 @@ DMG="dist/Magpie.dmg"
 VERSION="$VERSION" ./scripts/build-app.sh
 ./scripts/make-dmg.sh
 
-# Hash the local artifact before any network/tag operation, so a failed
-# release leaves nothing half-published.
+# Hash the local artifact before any network/tag operation.
 checksum="$(shasum -a 256 "$DMG" | awk '{print $1}')"
 
-# gh creates and pushes the tag (at main) together with the release, so there
-# is no window where a tag exists without its release.
-gh release create "$TAG" "$DMG" --repo "$REPO" --title "$TAG" --generate-notes --target main
+# Idempotent: re-running after a mid-release failure re-uploads the asset
+# rather than dying on "release already exists".
+if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    gh release upload "$TAG" "$DMG" --repo "$REPO" --clobber
+else
+    gh release create "$TAG" "$DMG" --repo "$REPO" --title "$TAG" --generate-notes --target main
+fi
 
-sed -i '' -E "s/^[[:space:]]*version \"[^\"]*\"/  version \"$VERSION\"/" "$CASK"
-sed -i '' -E "s/^[[:space:]]*sha256 \"[^\"]*\"/  sha256 \"$checksum\"/" "$CASK"
+sed -i '' -E "s/^([[:space:]]*)version \"[^\"]*\"/\1version \"$VERSION\"/" "$CASK"
+sed -i '' -E "s/^([[:space:]]*)sha256 \"[^\"]*\"/\1sha256 \"$checksum\"/" "$CASK"
 
 grep -qF "version \"$VERSION\"" "$CASK" || { echo "cask version bump did not apply in $CASK" >&2; exit 1; }
 grep -qF "sha256 \"$checksum\"" "$CASK" || { echo "cask sha256 bump did not apply in $CASK" >&2; exit 1; }
