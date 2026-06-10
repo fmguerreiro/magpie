@@ -26,24 +26,24 @@ Sources are adapters. Two ship today:
 
 ## How it compares
 
-Most notification tools cover one slice. Magpie is the only one that combines
-GitHub notifications and Jira issues in a native macOS menu bar while reusing
-your existing `gh` and `jira-cli` logins, so there's no OAuth app to authorize
-and no token to paste into the app.
+Magpie is the only tool here that combines GitHub notifications and Jira issues
+in a native macOS menu bar while reusing your existing `gh` and `jira-cli`
+logins, so there's no OAuth app to authorize and no token to paste in.
 
 | Tool | Sources | Platform | Auth | License | Price |
 |------|---------|----------|------|---------|-------|
-| **Magpie** | GitHub + Jira | macOS | Reuses `gh` / `jira-cli` | Open source | Free |
+| **Magpie** | GitHub + Jira | macOS | Reuses `gh` / `jira-cli` | Source available | Free |
 | [Gitify](https://gitify.io) | GitHub (+ Enterprise, Gitea) | macOS / Windows / Linux | OAuth / PAT | Open source (MIT) | Free |
 | [JiraBar](https://github.com/menubar-apps/JiraBar) | Jira | macOS | Host + API token | Open source | Free |
 | [Octobox](https://octobox.io) | GitHub | Web (self-host) | GitHub OAuth | Open source (AGPL-3.0) | Free public repos; $10/user/mo private |
 | [CatLight](https://catlight.io) | Jira + GitHub (PRs/Actions) + CI | macOS / Windows / Linux | Per-service login | Proprietary | Free tier + paid |
 | [MergeHelper](https://mergehelper.com) | GitHub + GitLab (PRs/MRs) | macOS | PAT (Keychain) | Proprietary | $12 |
 
-Git-only menu-bar apps (Gitify, MergeHelper) never reach Jira; Jira-only apps
-(JiraBar) never reach GitHub; Octobox is a GitHub-only web app; and CatLight,
-the one multi-source rival, is proprietary and CI/CD-centric. Pricing is current
-as of June 2026.
+CatLight is the only other multi-source option, and it's proprietary and
+CI/CD-centric rather than a notification-triage tool. Everything else covers a
+single slice: Gitify and Octobox are GitHub-only, MergeHelper tracks Git PRs
+across GitHub and GitLab but not Jira, and JiraBar is Jira-only. Pricing is
+current as of June 2026.
 
 ## Requirements
 
