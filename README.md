@@ -45,6 +45,21 @@ config (default `magpie-jira`):
 security add-generic-password -a "you@example.com" -s magpie-jira -w 'YOUR_JIRA_API_TOKEN' -U
 ```
 
+## Install with Homebrew
+
+```
+brew install --cask fmguerreiro/tap/magpie
+```
+
+Magpie is ad-hoc signed, not notarized, so Gatekeeper quarantines it on first
+launch. Clear it once:
+
+```
+xattr -dr com.apple.quarantine "/Applications/Magpie.app"
+```
+
+(or right-click the app in Finder, choose **Open**, then **Open** again).
+
 ## Build and install
 
 ```
