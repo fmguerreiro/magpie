@@ -1,4 +1,4 @@
-.PHONY: build app dmg install icon clean
+.PHONY: build app dmg install icon release clean
 
 # Compile the release binary only.
 build:
@@ -6,7 +6,7 @@ build:
 
 # Assemble dist/Magpie.app (build + bundle + icon + ad-hoc sign).
 app:
-	./scripts/build-app.sh
+	VERSION="$${VERSION:-1.0}" ./scripts/build-app.sh
 
 # Package dist/Magpie.dmg for distribution.
 dmg: app
@@ -33,6 +33,12 @@ icon:
 	sips -z 512 512   icon-1024.png --out AppIcon.iconset/icon_512x512.png
 	cp icon-1024.png AppIcon.iconset/icon_512x512@2x.png
 	iconutil -c icns AppIcon.iconset -o AppIcon.icns
+
+# Cut a release: build the DMG, publish a GitHub release, bump the Homebrew cask.
+# Pass the version: make release VERSION=0.1.0
+release:
+	@test -n "$(VERSION)" || { echo "VERSION is required, e.g. make release VERSION=0.1.0" >&2; exit 1; }
+	./scripts/release.sh $(VERSION)
 
 clean:
 	rm -rf .build dist AppIcon.iconset
