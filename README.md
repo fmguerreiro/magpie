@@ -32,7 +32,7 @@ logins, so there's no OAuth app to authorize and no token to paste in.
 
 | Tool | Sources | Platform | Auth | License | Price |
 |------|---------|----------|------|---------|-------|
-| **Magpie** | GitHub + Jira | macOS | Reuses `gh` / `jira-cli` | Source available | Free |
+| **Magpie** | GitHub + Jira | macOS | Reuses `gh` / `jira-cli` | Open source (MIT) | Free |
 | [Gitify](https://gitify.io) | GitHub (+ Enterprise, Gitea) | macOS / Windows / Linux | OAuth / PAT | Open source (MIT) | Free |
 | [JiraBar](https://github.com/menubar-apps/JiraBar) | Jira | macOS | Host + API token | Open source | Free |
 | [Octobox](https://octobox.io) | GitHub | Web (self-host) | GitHub OAuth | Open source (AGPL-3.0) | Free public repos; $10/user/mo private |
@@ -129,3 +129,7 @@ line is where a real signing identity would slot in.
 
 Each machine also needs the runtime prerequisites above (`gh` authenticated,
 `jira-cli` initialized + Keychain token) and its own `~/.config/magpie/config.json`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
