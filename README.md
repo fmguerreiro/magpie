@@ -39,11 +39,11 @@ logins, so there's no OAuth app to authorize and no token to paste in.
 | [CatLight](https://catlight.io) | Jira + GitHub (PRs/Actions) + CI | macOS / Windows / Linux | Per-service login | Proprietary | Free tier + paid |
 | [MergeHelper](https://mergehelper.com) | GitHub + GitLab (PRs/MRs) | macOS | PAT (Keychain) | Proprietary | $12 |
 
-CatLight is the only other multi-source option, and it's proprietary and
-CI/CD-centric rather than a notification-triage tool. Everything else covers a
-single slice: Gitify and Octobox are GitHub-only, MergeHelper tracks Git PRs
-across GitHub and GitLab but not Jira, and JiraBar is Jira-only. Pricing is
-current as of June 2026.
+CatLight is the only other multi-source option, and it's CI/CD-centric rather
+than a notification-triage tool. Everything else covers a single slice: Gitify
+and Octobox are GitHub-only, MergeHelper tracks PRs and MRs across GitHub and
+GitLab but not Jira, and JiraBar is Jira-only. Pricing is current as of June
+2026.
 
 ## Requirements
 
