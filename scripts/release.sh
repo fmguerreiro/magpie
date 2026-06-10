@@ -12,10 +12,13 @@ VERSION="${1:-}"
 VERSION="${VERSION#v}"
 TAG="v$VERSION"
 
-# The published tag points at main, so the working tree must be main to keep
-# the tagged commit and the built artifact in sync.
+# The published tag points at main, so HEAD must be main and level with the
+# remote: that keeps the tagged commit identical to the one the DMG is built
+# from, and lets the re-run path below trust the existing tag.
 branch="$(git rev-parse --abbrev-ref HEAD)"
 [ "$branch" = "main" ] || { echo "release from main (currently on $branch)" >&2; exit 1; }
+git fetch -q origin main
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || { echo "HEAD is not at origin/main — push or pull first" >&2; exit 1; }
 
 REPO="fmguerreiro/magpie"
 TAP_DIR="${TAP_DIR:-../homebrew-tap}"
@@ -33,6 +36,8 @@ checksum="$(shasum -a 256 "$DMG" | awk '{print $1}')"
 # Idempotent: re-running after a mid-release failure re-uploads the asset
 # rather than dying on "release already exists".
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+    tagged="$(git ls-remote origin "refs/tags/$TAG" | awk '{print $1}')"
+    [ "$tagged" = "$(git rev-parse HEAD)" ] || { echo "release $TAG already exists at $tagged, not HEAD — delete it to re-release" >&2; exit 1; }
     gh release upload "$TAG" "$DMG" --repo "$REPO" --clobber
 else
     gh release create "$TAG" "$DMG" --repo "$REPO" --title "$TAG" --generate-notes --target main
