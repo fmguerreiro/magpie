@@ -11,15 +11,21 @@ type/state icons, author avatars, and per-row dismiss. Built on SwiftUI
 `MenuBarExtra` (`.window` style), so the popover stays open and updates in
 place.
 
+Free and open source. The GitHub adapter rides your existing `gh` CLI login,
+so there's no classic personal access token to mint and no third-party OAuth
+app to authorize, unlike PAT-based menu-bar clients.
+
 <p align="center">
   <img src="docs/screenshot.png" alt="Magpie popover" width="320">
 </p>
 
 Sources are adapters. Two ship today:
 
-- **GitHub** — unread notifications via the `gh` CLI (reuses existing auth; no
-  token handling, no third-party OAuth app). Each PR/issue is enriched with its
-  live state (open / merged / closed / draft / changes-requested / approved).
+- **GitHub** — unread notifications via the `gh` CLI (reuses your existing
+  `gh auth login`; no token handling, no third-party OAuth app). Needs `gh`
+  authenticated with `repo` or `notifications` scope. Each PR/issue is enriched
+  with its live state (open / merged / closed / draft / changes-requested /
+  approved).
 - **Jira** — assigned + watched + reported issues via `jira-cli`, enriched with
   status category and assignee avatar. "Seen" is local (Jira has no per-issue
   read state): dismissing hides an issue until it next changes.
@@ -27,7 +33,8 @@ Sources are adapters. Two ship today:
 ## Requirements
 
 - macOS 13+
-- [`gh`](https://cli.github.com) authenticated (`gh auth status`)
+- [`gh`](https://cli.github.com) authenticated with `repo` or `notifications`
+  scope (`gh auth status` to check; default `gh auth login` grants `repo`)
 - [`jira-cli`](https://github.com/ankitpokhrel/jira-cli) initialized, if using
   the Jira adapter. Its API token is read from the macOS Keychain and injected
   into the `jira` subprocess (see config).
