@@ -24,17 +24,15 @@ struct AppConfig {
     }
 
     // Repo/org filter for GitHub notifications. Patterns match "owner",
-    // "owner/*", or "owner/repo" (case-insensitive). With an include list, only
-    // matching repos show; exclude hides repos. On conflict, include wins.
+    // "owner/*", or "owner/repo" (case-insensitive). "exclude" hides repos;
+    // "include" rescues specific repos from a broader exclude (include wins).
     struct GitHubFilter {
         let include: [String]
         let exclude: [String]
 
         func allows(_ fullName: String) -> Bool {
-            let included = Self.matches(include, fullName)
-            if !include.isEmpty && !included { return false }
-            if Self.matches(exclude, fullName) && !included { return false }
-            return true
+            if Self.matches(include, fullName) { return true }
+            return !Self.matches(exclude, fullName)
         }
 
         private static func matches(_ patterns: [String], _ fullName: String) -> Bool {
