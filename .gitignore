@@ -4,3 +4,6 @@
 *.xcodeproj
 AppIcon.iconset/
 dist/
+
+# Local runtime config (real one lives in ~/.config/magpie); never commit it
+/config.json
