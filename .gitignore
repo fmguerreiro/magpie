@@ -7,3 +7,8 @@ dist/
 
 # Local runtime config (real one lives in ~/.config/magpie); never commit it
 /config.json
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
