@@ -301,8 +301,9 @@ struct GHAuthor: Decodable {
     let login: String
 }
 
-struct GHComment: Decodable {
+struct GHCommentDetail: Decodable {
     let user: GHAuthor
+    let body: String?
 }
 
 struct GHPullRequestInfo: Decodable {
@@ -402,27 +403,60 @@ final class GitHubAdapter: NotificationAdapter {
     private static let actorReasons: Set<String> = ["mention", "team_mention", "comment"]
 
     private func resolveActor(_ item: Item, completion: @escaping (Item) -> Void) {
-        guard let raw = item.rawReason, Self.actorReasons.contains(raw),
-              let commentURL = item.latestCommentURL else {
+        guard let raw = item.rawReason, Self.actorReasons.contains(raw) else {
             completion(item)
             return
         }
-        // gh api accepts a full https://api.github.com/... URL as the path arg.
-        runCommand(ghPath, ["api", commentURL]) { result in
+        if let commentURL = item.latestCommentURL {
+            // gh api accepts a full https://api.github.com/... URL as the path arg.
+            runCommand(ghPath, ["api", commentURL]) { result in
+                guard case .success(let data) = result,
+                      let comment = try? JSONDecoder().decode(GHCommentDetail.self, from: data) else {
+                    completion(item)
+                    return
+                }
+                self.applyActor(item, raw: raw, commentLogin: comment.user.login, completion: completion)
+            }
+        } else {
+            resolveActorFromThread(item, raw: raw, completion: completion)
+        }
+    }
+
+    // GitHub omits latest_comment_url when a thread's most recent activity was
+    // not a comment (e.g. a base-ref change bumping an older mention). Scan the
+    // thread's comments to recover who actually mentioned the viewer.
+    private func resolveActorFromThread(_ item: Item, raw: String, completion: @escaping (Item) -> Void) {
+        guard let webURL = item.url, let endpoint = issueCommentsEndpoint(forWebURL: webURL) else {
+            completion(item)
+            return
+        }
+        // --slurp wraps each fetched page in an outer array; without it
+        // --paginate concatenates raw arrays into invalid JSON.
+        runCommand(ghPath, ["api", "--slurp", "--paginate", endpoint]) { result in
             guard case .success(let data) = result,
-                  let comment = try? JSONDecoder().decode(GHComment.self, from: data) else {
+                  let pages = try? JSONDecoder().decode([[GHCommentDetail]].self, from: data) else {
                 completion(item)
                 return
             }
-            var updated = item
-            let attribution = attributeActor(rawReason: raw, commentLogin: comment.user.login,
-                                             viewerLogin: self.viewerLogin)
-            updated.reason = attribution.reason
-            if let avatarLogin = attribution.avatarLogin {
-                updated.avatarURL = Self.avatarURL(avatarLogin)
+            let summaries = pages.flatMap { $0 }.map { CommentSummary(author: $0.user.login, body: $0.body ?? "") }
+            guard let actor = mentioner(in: summaries, rawReason: raw, viewerLogin: self.viewerLogin) else {
+                completion(item)
+                return
             }
-            completion(updated)
+            self.applyActor(item, raw: raw, commentLogin: actor, completion: completion)
         }
+    }
+
+    private func applyActor(_ item: Item, raw: String, commentLogin: String,
+                            completion: @escaping (Item) -> Void) {
+        var updated = item
+        let attribution = attributeActor(rawReason: raw, commentLogin: commentLogin,
+                                         viewerLogin: viewerLogin)
+        updated.reason = attribution.reason
+        if let avatarLogin = attribution.avatarLogin {
+            updated.avatarURL = Self.avatarURL(avatarLogin)
+        }
+        completion(updated)
     }
 
     func markRead(_ item: Item) {
