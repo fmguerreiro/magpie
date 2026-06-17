@@ -3,8 +3,8 @@
   "ghPath": "/opt/homebrew/bin/gh",
   "jiraPath": "/opt/homebrew/bin/jira",
   "github": {
-    "_comment": "Optional repo/org filter. Patterns match 'owner', 'owner/*', or 'owner/repo' (case-insensitive). With 'include', only matching repos show; 'exclude' hides repos; on conflict include wins. Omit the block to show everything.",
-    "include": [],
+    "_comment": "Optional repo/org filter. Patterns match 'owner', 'owner/*', or 'owner/repo' (case-insensitive). 'exclude' hides repos; 'include' rescues specific repos from a broader exclude (include wins). Example below hides all of some-org except some-org/keep-this. Omit the block to show everything.",
+    "include": ["some-org/keep-this"],
     "exclude": ["some-org"]
   },
   "jira": {
