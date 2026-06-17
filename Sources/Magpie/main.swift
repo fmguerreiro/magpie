@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import MagpieCore
 
 let securityPath = "/usr/bin/security"
 
@@ -192,22 +193,6 @@ func relativeAge(_ date: Date) -> String {
     return "\(Int(elapsed / week))w ago"
 }
 
-func friendlyGitHubReason(_ raw: String) -> String {
-    switch raw {
-    case "review_requested": return "review requested"
-    case "mention": return "mentioned you"
-    case "team_mention": return "team mentioned"
-    case "assign": return "assigned to you"
-    case "author": return "you opened this"
-    case "comment": return "new comment"
-    case "state_change": return "state changed"
-    case "subscribed", "manual": return "subscribed"
-    case "ci_activity": return "CI activity"
-    case "security_alert": return "security alert"
-    default: return raw.replacingOccurrences(of: "_", with: " ")
-    }
-}
-
 // MARK: - Subprocess helper
 
 func runCommand(_ executable: String, _ arguments: [String], env: [String: String]? = nil,
@@ -336,6 +321,18 @@ struct GHIssueInfo: Decodable {
 final class GitHubAdapter: NotificationAdapter {
     let source = Source.github
 
+    // The authenticated user's login, used to avoid attributing a mention to
+    // the viewer themselves. Confined to the main thread: written once from the
+    // prefetch below, read in resolveActor's main-thread completion.
+    private var viewerLogin: String?
+
+    init() {
+        DispatchQueue.global(qos: .utility).async {
+            let login = runCommandSync(ghPath, ["api", "user", "--jq", ".login"])
+            DispatchQueue.main.async { self.viewerLogin = login }
+        }
+    }
+
     func load(completion: @escaping (Result<[Item], Error>) -> Void) {
         runCommand(ghPath, ["api", "notifications"]) { result in
             switch result {
@@ -418,18 +415,13 @@ final class GitHubAdapter: NotificationAdapter {
                 return
             }
             var updated = item
-            updated.reason = Self.actorReason(raw, login: comment.user.login)
-            updated.avatarURL = Self.avatarURL(comment.user.login)
+            let attribution = attributeActor(rawReason: raw, commentLogin: comment.user.login,
+                                             viewerLogin: self.viewerLogin)
+            updated.reason = attribution.reason
+            if let avatarLogin = attribution.avatarLogin {
+                updated.avatarURL = Self.avatarURL(avatarLogin)
+            }
             completion(updated)
-        }
-    }
-
-    private static func actorReason(_ raw: String, login: String) -> String {
-        switch raw {
-        case "mention": return "\(login) mentioned you"
-        case "team_mention": return "\(login) mentioned your team"
-        case "comment": return "\(login) commented"
-        default: return friendlyGitHubReason(raw)
         }
     }
 
