@@ -172,10 +172,11 @@ struct Item: Identifiable {
         status?.tint ?? .secondary
     }
 
-    // Small context line under the title: GitHub's reason, else the status words,
-    // suffixed with how long ago the notification last changed ("review requested 5h ago").
+    // Small context line under the title: the event reason or the thread's state,
+    // suffixed with how long ago the notification last changed ("review requested 5h ago",
+    // "closed 1h ago").
     var caption: String? {
-        let base = reason ?? status?.label
+        let base = captionBase(rawReason: rawReason, statusLabel: status?.label, reason: reason)
         guard let base else { return updatedAt.map(relativeAge) }
         guard let updatedAt else { return base }
         return "\(base) \(relativeAge(updatedAt))"
@@ -1178,11 +1179,12 @@ struct DemoAdapter: NotificationAdapter {
 
     private static func gh(_ ref: String, _ group: String, _ title: String,
                            kind: SubjectKind, reason: String, status: ThreadStatus,
-                           login: String, age: TimeInterval) -> Item {
+                           login: String, age: TimeInterval, rawReason: String? = nil) -> Item {
         Item(id: "demo:\(group)\(ref)", source: .github, group: group, title: title,
              url: URL(string: "https://github.com"), actionId: "demo:\(group)\(ref)",
              kind: kind, canMarkRead: true, reference: ref, reason: reason,
-             status: status, avatarURL: avatar(login), updatedAt: ago(age))
+             status: status, avatarURL: avatar(login), updatedAt: ago(age),
+             rawReason: rawReason)
     }
 
     private static func jira(_ key: String, _ title: String, reason: String,
@@ -1199,35 +1201,35 @@ struct DemoAdapter: NotificationAdapter {
         gh("#128", "vercel/webapp", "Add OAuth login flow", kind: .pullRequest,
            reason: "review requested",
            status: ThreadStatus(label: "open", symbol: "arrow.triangle.pull", tint: .green),
-           login: "octocat", age: 5 * 3600),
+           login: "octocat", age: 5 * 3600, rawReason: "review_requested"),
         gh("#131", "vercel/webapp", "Fix flaky checkout test", kind: .pullRequest,
            reason: "your thread",
            status: ThreadStatus(label: "changes requested", symbol: "exclamationmark.bubble.fill", tint: .orange),
-           login: "torvalds", age: 2 * 3600),
+           login: "torvalds", age: 2 * 3600, rawReason: "author"),
         gh("#119", "vercel/webapp", "Bump dependencies to latest", kind: .pullRequest,
            reason: "subscribed",
            status: ThreadStatus(label: "approved", symbol: "checkmark.seal.fill", tint: .green),
-           login: "gaearon", age: 26 * 3600),
+           login: "gaearon", age: 26 * 3600, rawReason: "subscribed"),
         gh("#98", "vercel/webapp", "Spike: websocket transport", kind: .pullRequest,
            reason: "your thread",
            status: ThreadStatus(label: "draft", symbol: "circle.dashed", tint: .gray),
-           login: "defunkt", age: 3 * 86400),
+           login: "defunkt", age: 3 * 86400, rawReason: "author"),
         gh("#117", "supabase/api", "Refactor cache invalidation", kind: .pullRequest,
            reason: "review requested",
            status: ThreadStatus(label: "merged", symbol: "arrow.triangle.merge", tint: .purple),
-           login: "mojombo", age: 3 * 3600),
+           login: "mojombo", age: 3 * 3600, rawReason: "review_requested"),
         gh("#51", "supabase/api", "Add per-route rate limiting", kind: .pullRequest,
            reason: "octocat mentioned you",
            status: ThreadStatus(label: "closed", symbol: "xmark.circle.fill", tint: .red),
-           login: "octocat", age: 6 * 3600),
+           login: "octocat", age: 6 * 3600, rawReason: "mention"),
         gh("#44", "supabase/api", "Race condition in worker pool", kind: .issue,
            reason: "kelseyhightower mentioned you",
            status: ThreadStatus(label: "open", symbol: "smallcircle.filled.circle", tint: .green),
-           login: "kelseyhightower", age: 35 * 60),
+           login: "kelseyhightower", age: 35 * 60, rawReason: "mention"),
         gh("#40", "supabase/api", "Memory leak on reconnect", kind: .issue,
            reason: "state changed",
            status: ThreadStatus(label: "closed", symbol: "checkmark.circle.fill", tint: .purple),
-           login: "torvalds", age: 4 * 3600),
+           login: "torvalds", age: 4 * 3600, rawReason: "state_change"),
         jira("PF-204", "Design new onboarding screens", reason: "Yuki Tanaka commented",
              status: ThreadStatus(label: "In Progress", symbol: "circle.lefthalf.filled", tint: .blue),
              login: "gaearon", age: 1 * 3600),
