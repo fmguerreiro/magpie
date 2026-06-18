@@ -17,10 +17,68 @@ public struct CommentSummary: Equatable {
 // PR conversation comments live under the issues endpoint, which is where an
 // @-mention in the timeline lands. nil when the URL is not a PR/issue.
 public func issueCommentsEndpoint(forWebURL url: URL) -> String? {
+    commentsEndpoint(forWebURL: url, webKinds: ["pull", "issues"], apiSegment: "issues")
+}
+
+// Inline PR review comments live under the pulls endpoint, separate from the
+// conversation comments above. nil for issues and non-PR/issue URLs.
+public func reviewCommentsEndpoint(forWebURL url: URL) -> String? {
+    commentsEndpoint(forWebURL: url, webKinds: ["pull"], apiSegment: "pulls")
+}
+
+private func commentsEndpoint(forWebURL url: URL, webKinds: Set<String>, apiSegment: String) -> String? {
     let parts = url.pathComponents.filter { $0 != "/" }
-    guard parts.count >= 4, parts[2] == "pull" || parts[2] == "issues",
-          Int(parts[3]) != nil else { return nil }
-    return "repos/\(parts[0])/\(parts[1])/issues/\(parts[3])/comments"
+    guard parts.count >= 4, webKinds.contains(parts[2]), Int(parts[3]) != nil else { return nil }
+    return "repos/\(parts[0])/\(parts[1])/\(apiSegment)/\(parts[3])/comments"
+}
+
+public struct DatedComment: Equatable {
+    public let author: String
+    public let createdAt: Date
+
+    public init(author: String, createdAt: Date) {
+        self.author = author
+        self.createdAt = createdAt
+    }
+}
+
+// A comment counts as the trigger only if it sits within this window of the
+// thread's last-changed time. GitHub omits latest_comment_url for authored
+// threads and bumps the thread at or shortly after the comment (lags of tens of
+// seconds are real), so we match on recency rather than an exact key.
+public let commentTriggerWindow: TimeInterval = 5 * 60
+
+// GitHub bot logins carry a "[bot]" suffix ("cubic-dev-ai[bot]"); drop it for
+// display so the caption reads "cubic-dev-ai commented".
+public func displayLogin(_ login: String) -> String {
+    login.hasSuffix("[bot]") ? String(login.dropLast("[bot]".count)) : login
+}
+
+// For a thread that arrived under a reason vaguer than its state (author,
+// subscribed, ...), a recent comment by someone other than the viewer is the
+// real news. Returns the actor to surface ("octocat commented", avatar octocat),
+// or nil to keep the state caption: not such a reason, no comment, the viewer's
+// own comment, or a comment too far from the thread's last change to be its cause.
+public func recentCommenterAttribution(rawReason: String?, viewerLogin: String?,
+                                       latest: DatedComment?, threadUpdatedAt: Date?) -> MentionAttribution? {
+    guard let rawReason, reasonsSupersededByState.contains(rawReason),
+          let latest, let threadUpdatedAt,
+          latest.author != viewerLogin,
+          abs(threadUpdatedAt.timeIntervalSince(latest.createdAt)) <= commentTriggerWindow else { return nil }
+    // GitHub serves a bot's avatar at its stripped login, not the "[bot]" form,
+    // so use the display name for both the caption and the avatar.
+    let name = displayLogin(latest.author)
+    return MentionAttribution(reason: "\(name) commented", avatarLogin: name)
+}
+
+// The more recent of two optional comments, or whichever one is present.
+public func newer(_ first: DatedComment?, _ second: DatedComment?) -> DatedComment? {
+    switch (first, second) {
+    case let (first?, second?): return first.createdAt >= second.createdAt ? first : second
+    case let (first?, nil): return first
+    case let (nil, second?): return second
+    case (nil, nil): return nil
+    }
 }
 
 // Comments must be in chronological (oldest-first) order. For a mention, prefer

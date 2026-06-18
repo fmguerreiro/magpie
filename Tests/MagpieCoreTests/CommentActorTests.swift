@@ -76,3 +76,64 @@ import Testing
     let comments = [CommentSummary(author: "alice", body: "x")]
     #expect(mentioner(in: comments, rawReason: "state_change", viewerLogin: "fmguerreiro") == nil)
 }
+
+@Test func buildsReviewCommentsEndpointForAPullRequestURL() {
+    let url = URL(string: "https://github.com/octo/repo/pull/115")!
+    #expect(reviewCommentsEndpoint(forWebURL: url) == "repos/octo/repo/pulls/115/comments")
+}
+
+@Test func hasNoReviewCommentsEndpointForAnIssue() {
+    #expect(reviewCommentsEndpoint(forWebURL: URL(string: "https://github.com/octo/repo/issues/7")!) == nil)
+}
+
+@Test func dropsTheBotSuffixFromADisplayLogin() {
+    #expect(displayLogin("cubic-dev-ai[bot]") == "cubic-dev-ai")
+    #expect(displayLogin("octocat") == "octocat")
+}
+
+private let threadUpdated = Date(timeIntervalSince1970: 1_000_000)
+
+@Test func namesARecentCommenterOnAnAuthoredThread() {
+    let comment = DatedComment(author: "cubic-dev-ai[bot]", createdAt: threadUpdated.addingTimeInterval(-21))
+    #expect(recentCommenterAttribution(rawReason: "author", viewerLogin: "fmguerreiro",
+                                       latest: comment, threadUpdatedAt: threadUpdated)
+            == MentionAttribution(reason: "cubic-dev-ai commented", avatarLogin: "cubic-dev-ai"))
+}
+
+@Test func picksTheMoreRecentOfTwoComments() {
+    let older = DatedComment(author: "alice", createdAt: threadUpdated.addingTimeInterval(-100))
+    let newest = DatedComment(author: "bob", createdAt: threadUpdated.addingTimeInterval(-10))
+    #expect(newer(older, newest) == newest)
+    #expect(newer(newest, older) == newest)
+    #expect(newer(older, nil) == older)
+    #expect(newer(nil, newest) == newest)
+    #expect(newer(nil, nil) == nil)
+    let tieFirst = DatedComment(author: "alice", createdAt: threadUpdated)
+    let tieSecond = DatedComment(author: "bob", createdAt: threadUpdated)
+    #expect(newer(tieFirst, tieSecond) == tieFirst)
+}
+
+@Test func doesNotSurfaceTheViewersOwnComment() {
+    let comment = DatedComment(author: "fmguerreiro", createdAt: threadUpdated.addingTimeInterval(-21))
+    #expect(recentCommenterAttribution(rawReason: "author", viewerLogin: "fmguerreiro",
+                                       latest: comment, threadUpdatedAt: threadUpdated) == nil)
+}
+
+// A comment far from the thread's last change was not the trigger (a CI run or
+// push bumped the thread); keep the state caption rather than blame the comment.
+@Test func ignoresACommentFarFromTheThreadsLastChange() {
+    let comment = DatedComment(author: "octocat", createdAt: threadUpdated.addingTimeInterval(-3600))
+    #expect(recentCommenterAttribution(rawReason: "author", viewerLogin: "fmguerreiro",
+                                       latest: comment, threadUpdatedAt: threadUpdated) == nil)
+}
+
+@Test func leavesEventReasonsToTheirOwnActorNaming() {
+    let comment = DatedComment(author: "octocat", createdAt: threadUpdated.addingTimeInterval(-21))
+    #expect(recentCommenterAttribution(rawReason: "mention", viewerLogin: "fmguerreiro",
+                                       latest: comment, threadUpdatedAt: threadUpdated) == nil)
+}
+
+@Test func surfacesNothingWhenThereIsNoComment() {
+    #expect(recentCommenterAttribution(rawReason: "author", viewerLogin: "fmguerreiro",
+                                       latest: nil, threadUpdatedAt: threadUpdated) == nil)
+}
