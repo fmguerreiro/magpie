@@ -305,6 +305,11 @@ struct GHAuthor: Decodable {
 struct GHCommentDetail: Decodable {
     let user: GHAuthor
     let body: String?
+    let created_at: String?
+
+    var createdAt: Date? {
+        created_at.flatMap { GHThread.timestampFormatter.date(from: $0) }
+    }
 }
 
 struct GHPullRequestInfo: Decodable {
@@ -372,25 +377,25 @@ final class GitHubAdapter: NotificationAdapter {
                 guard case .success(let data) = result,
                       let info = try? JSONDecoder().decode(GHPullRequestInfo.self, from: data) else {
                     // State fetch failed; still try to name the mentioner.
-                    self.resolveActor(item, completion: completion)
+                    self.resolveActorOrCommenter(item, completion: completion)
                     return
                 }
                 var updated = item
                 updated.status = Self.status(forPullRequest: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                self.resolveActor(updated, completion: completion)
+                self.resolveActorOrCommenter(updated, completion: completion)
             }
         case .issue:
             runCommand(ghPath, ["issue", "view", url, "--json", "state,stateReason,author"]) { result in
                 guard case .success(let data) = result,
                       let info = try? JSONDecoder().decode(GHIssueInfo.self, from: data) else {
-                    self.resolveActor(item, completion: completion)
+                    self.resolveActorOrCommenter(item, completion: completion)
                     return
                 }
                 var updated = item
                 updated.status = Self.status(forIssue: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                self.resolveActor(updated, completion: completion)
+                self.resolveActorOrCommenter(updated, completion: completion)
             }
         default:
             // Commits, releases, discussions etc. carry no PR/issue state to enrich.
@@ -402,6 +407,60 @@ final class GitHubAdapter: NotificationAdapter {
     // comment ("octocat mentioned you") and show their avatar instead of the
     // PR/issue author's. Other reasons pass through untouched.
     private static let actorReasons: Set<String> = ["mention", "team_mention", "comment"]
+
+    private func resolveActorOrCommenter(_ item: Item, completion: @escaping (Item) -> Void) {
+        guard let raw = item.rawReason else { completion(item); return }
+        if Self.actorReasons.contains(raw) {
+            resolveActor(item, completion: completion)
+        } else if reasonsSupersededByState.contains(raw) {
+            resolveCommenter(item, completion: completion)
+        } else {
+            completion(item)
+        }
+    }
+
+    // GitHub omits latest_comment_url for authored threads, so fetch the newest
+    // conversation and review comment directly and let recentCommenterAttribution
+    // decide whether one is the trigger worth surfacing.
+    private func resolveCommenter(_ item: Item, completion: @escaping (Item) -> Void) {
+        guard let webURL = item.url else { completion(item); return }
+        let issue = issueCommentsEndpoint(forWebURL: webURL)
+        let review = reviewCommentsEndpoint(forWebURL: webURL)
+        guard issue != nil || review != nil else { completion(item); return }
+        fetchNewestComment(issue) { issueComment in
+            self.fetchNewestComment(review) { reviewComment in
+                guard let attribution = recentCommenterAttribution(
+                          rawReason: item.rawReason, viewerLogin: self.viewerLogin,
+                          latest: newer(issueComment, reviewComment),
+                          threadUpdatedAt: item.updatedAt) else {
+                    completion(item)
+                    return
+                }
+                var updated = item
+                updated.reason = attribution.reason
+                if let avatarLogin = attribution.avatarLogin {
+                    updated.avatarURL = Self.avatarURL(avatarLogin)
+                }
+                completion(updated)
+            }
+        }
+    }
+
+    // An endpoint's single newest comment, or nil when the endpoint is absent,
+    // the request fails, or the comment carries no parseable timestamp. sort and
+    // per_page bound the response to one row.
+    private func fetchNewestComment(_ endpoint: String?, completion: @escaping (DatedComment?) -> Void) {
+        guard let endpoint else { completion(nil); return }
+        runCommand(ghPath, ["api", "\(endpoint)?per_page=1&sort=created&direction=desc"]) { result in
+            guard case .success(let data) = result,
+                  let comments = try? JSONDecoder().decode([GHCommentDetail].self, from: data),
+                  let newest = comments.first, let createdAt = newest.createdAt else {
+                completion(nil)
+                return
+            }
+            completion(DatedComment(author: newest.user.login, createdAt: createdAt))
+        }
+    }
 
     private func resolveActor(_ item: Item, completion: @escaping (Item) -> Void) {
         guard let raw = item.rawReason, Self.actorReasons.contains(raw) else {
