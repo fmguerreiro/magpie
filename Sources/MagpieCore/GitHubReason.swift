@@ -9,7 +9,7 @@ public func friendlyGitHubReason(_ raw: String) -> String {
     case "mention": return "mentioned you"
     case "team_mention": return "team mentioned"
     case "assign": return "assigned to you"
-    case "author": return "you opened this"
+    case "author": return "your thread"
     case "comment": return "new comment"
     case "state_change": return "state changed"
     case "subscribed", "manual": return "subscribed"
