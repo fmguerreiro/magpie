@@ -42,3 +42,10 @@ import Testing
     #expect(friendlyGitHubReason("security_alert") == "security alert")
     #expect(friendlyGitHubReason("some_unknown_reason") == "some unknown reason")
 }
+
+// The caption suffixes the reason with the thread's last-activity time, so
+// "author" must read as a standing relationship rather than a creation verb:
+// you open a thread once at creation, but the suffix tracks every later change.
+@Test func phrasesAuthorAsAStandingRelationshipNotACreationEvent() {
+    #expect(friendlyGitHubReason("author") == "your thread")
+}
