@@ -157,11 +157,9 @@ struct Item: Identifiable {
     var version: String? = nil
     // When the notification last changed, used to show "5h ago" in the caption.
     var updatedAt: Date? = nil
-    // GitHub's raw reason ("mention", "comment", ...), kept so enrich can decide
-    // whether to resolve the actor behind the latest comment.
+    // GitHub's raw reason ("mention", "comment", ...), used by captionBase to
+    // decide whether the thread's state outranks the reason in the caption.
     var rawReason: String? = nil
-    // GitHub API URL of the comment that triggered this notification, if any.
-    var latestCommentURL: String? = nil
     // Set during enrichment when the thread's latest action is the viewer's own;
     // the store marks it read on GitHub and drops it instead of displaying it.
     var suppressed: Bool = false
@@ -281,7 +279,6 @@ struct GHThread: Identifiable, Decodable {
         let title: String
         let url: String?
         let type: String
-        let latest_comment_url: String?
     }
 
     struct Repository: Decodable {
@@ -342,9 +339,9 @@ struct GHIssueInfo: Decodable {
 final class GitHubAdapter: NotificationAdapter {
     let source = Source.github
 
-    // The authenticated user's login, used to avoid attributing a mention to
-    // the viewer themselves. Confined to the main thread: written once from the
-    // prefetch below, read in resolveActor's main-thread completion.
+    // The authenticated user's login, used to avoid attributing an action to the
+    // viewer themselves. Confined to the main thread: written once from the
+    // prefetch below, read in the enrichment completions.
     private var viewerLogin: String?
 
     init() {
@@ -370,8 +367,7 @@ final class GitHubAdapter: NotificationAdapter {
                              reference: thread.webURL.flatMap { Int($0.lastPathComponent) }.map { "#\($0)" },
                              reason: friendlyGitHubReason(thread.reason),
                              status: nil, avatarURL: nil, updatedAt: thread.updatedAt,
-                             rawReason: thread.reason,
-                             latestCommentURL: thread.subject.latest_comment_url)
+                             rawReason: thread.reason)
                     }
                     completion(.success(items))
                 } catch {
@@ -419,16 +415,12 @@ final class GitHubAdapter: NotificationAdapter {
         }
     }
 
-    // For mention/comment notifications, name the person behind the triggering
-    // comment ("octocat mentioned you") and show their avatar instead of the
-    // PR/issue author's. Other reasons pass through untouched.
-    private static let actorReasons: Set<String> = ["mention", "team_mention", "comment"]
-
     // Caption the thread by its most recent actor action, or suppress it when that
     // action is the viewer's own. A review that is the latest event ("ryukez
-    // approved") wins over the subscription reason; failing that, fall back to the
-    // mention/commenter/state caption with the comment already fetched here so it
-    // is not fetched twice.
+    // approved") wins over the subscription reason; a recent comment that is newer
+    // than any review becomes the caption (using "mentioned you" when it actually
+    // @-mentions the viewer, "commented" otherwise). Falls back to the state caption
+    // when no recent actor action applies.
     private func resolveLatestEvent(_ item: Item, mergedByViewer: Bool,
                                     completion: @escaping (Item) -> Void) {
         fetchItemNewestComment(item) { comment in
@@ -447,26 +439,14 @@ final class GitHubAdapter: NotificationAdapter {
                     completion(self.applying(attribution, to: item))
                     return
                 }
-                self.resolveActorOrCommenter(item, prefetchedComment: comment, completion: completion)
-            }
-        }
-    }
-
-    private func resolveActorOrCommenter(_ item: Item, prefetchedComment: DatedComment?,
-                                         completion: @escaping (Item) -> Void) {
-        guard let raw = item.rawReason else { completion(item); return }
-        if Self.actorReasons.contains(raw) {
-            resolveActor(item, completion: completion)
-        } else if reasonsSupersededByState.contains(raw) {
-            guard let attribution = recentCommenterAttribution(
-                      rawReason: raw, viewerLogin: viewerLogin,
-                      latest: prefetchedComment, threadUpdatedAt: item.updatedAt) else {
+                if let attribution = commentEventAttribution(viewerLogin: self.viewerLogin,
+                                                             comment: comment,
+                                                             threadUpdatedAt: item.updatedAt) {
+                    completion(self.applying(attribution, to: item))
+                    return
+                }
                 completion(item)
-                return
             }
-            completion(applying(attribution, to: item))
-        } else {
-            completion(item)
         }
     }
 
@@ -506,8 +486,10 @@ final class GitHubAdapter: NotificationAdapter {
     private func fetchNewestComment(_ endpoint: String?, completion: @escaping (DatedComment?) -> Void) {
         guard let endpoint else { completion(nil); return }
         fetchAll(endpoint, as: GHCommentDetail.self) { comments in
-            let dated = comments.compactMap { comment in
-                comment.createdAt.map { DatedComment(author: comment.user.login, createdAt: $0) }
+            let dated = comments.compactMap { comment -> DatedComment? in
+                guard let date = comment.createdAt else { return nil }
+                let mentions = self.viewerLogin.map { bodyMentions(comment.body ?? "", login: $0) } ?? false
+                return DatedComment(author: comment.user.login, createdAt: date, mentionsViewer: mentions)
             }
             completion(newestComment(in: dated))
         }
@@ -526,63 +508,6 @@ final class GitHubAdapter: NotificationAdapter {
             }
             completion(pages.flatMap { $0 })
         }
-    }
-
-    private func resolveActor(_ item: Item, completion: @escaping (Item) -> Void) {
-        guard let raw = item.rawReason, Self.actorReasons.contains(raw) else {
-            completion(item)
-            return
-        }
-        if let commentURL = item.latestCommentURL {
-            // gh api accepts a full https://api.github.com/... URL as the path arg.
-            runCommand(ghPath, ["api", commentURL]) { result in
-                guard case .success(let data) = result,
-                      let comment = try? JSONDecoder().decode(GHCommentDetail.self, from: data) else {
-                    completion(item)
-                    return
-                }
-                self.applyActor(item, raw: raw, commentLogin: comment.user.login, completion: completion)
-            }
-        } else {
-            resolveActorFromThread(item, raw: raw, completion: completion)
-        }
-    }
-
-    // GitHub omits latest_comment_url when a thread's most recent activity was
-    // not a comment (e.g. a base-ref change bumping an older mention). Scan the
-    // thread's comments to recover who actually mentioned the viewer.
-    private func resolveActorFromThread(_ item: Item, raw: String, completion: @escaping (Item) -> Void) {
-        guard let webURL = item.url, let endpoint = issueCommentsEndpoint(forWebURL: webURL) else {
-            completion(item)
-            return
-        }
-        // --slurp wraps each fetched page in an outer array; without it
-        // --paginate concatenates raw arrays into invalid JSON.
-        runCommand(ghPath, ["api", "--slurp", "--paginate", endpoint]) { result in
-            guard case .success(let data) = result,
-                  let pages = try? JSONDecoder().decode([[GHCommentDetail]].self, from: data) else {
-                completion(item)
-                return
-            }
-            let summaries = pages.flatMap { $0 }.map { CommentSummary(author: $0.user.login, body: $0.body ?? "") }
-            guard let actor = mentioner(in: summaries, rawReason: raw, viewerLogin: self.viewerLogin) else {
-                completion(item)
-                return
-            }
-            self.applyActor(item, raw: raw, commentLogin: actor, completion: completion)
-        }
-    }
-
-    private func applyActor(_ item: Item, raw: String, commentLogin: String,
-                            completion: @escaping (Item) -> Void) {
-        var updated = item
-        let attribution = attributeActor(rawReason: raw, commentLogin: commentLogin,
-                                         viewerLogin: viewerLogin)
-        updated.reason = attribution.reason
-        if let avatarLogin = attribution.avatarLogin {
-            updated.avatarURL = Self.avatarURL(avatarLogin)
-        }
-        completion(updated)
     }
 
     func markRead(_ item: Item) {

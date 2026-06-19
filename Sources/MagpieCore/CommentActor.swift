@@ -4,16 +4,6 @@
 
 import Foundation
 
-public struct CommentSummary: Equatable {
-    public let author: String
-    public let body: String
-
-    public init(author: String, body: String) {
-        self.author = author
-        self.body = body
-    }
-}
-
 // PR conversation comments live under the issues endpoint, which is where an
 // @-mention in the timeline lands. nil when the URL is not a PR/issue.
 public func issueCommentsEndpoint(forWebURL url: URL) -> String? {
@@ -41,10 +31,12 @@ private func apiEndpoint(forWebURL url: URL, webKinds: Set<String>, apiSegment: 
 public struct DatedComment: Equatable {
     public let author: String
     public let createdAt: Date
+    public let mentionsViewer: Bool
 
-    public init(author: String, createdAt: Date) {
+    public init(author: String, createdAt: Date, mentionsViewer: Bool = false) {
         self.author = author
         self.createdAt = createdAt
+        self.mentionsViewer = mentionsViewer
     }
 }
 
@@ -60,21 +52,17 @@ public func displayLogin(_ login: String) -> String {
     login.hasSuffix("[bot]") ? String(login.dropLast("[bot]".count)) : login
 }
 
-// For a thread that arrived under a reason vaguer than its state (author,
-// subscribed, ...), a recent comment by someone other than the viewer is the
-// real news. Returns the actor to surface ("octocat commented", avatar octocat),
-// or nil to keep the state caption: not such a reason, no comment, the viewer's
-// own comment, or a comment too far from the thread's last change to be its cause.
-public func recentCommenterAttribution(rawReason: String?, viewerLogin: String?,
-                                       latest: DatedComment?, threadUpdatedAt: Date?) -> MentionAttribution? {
-    guard let rawReason, reasonsSupersededByState.contains(rawReason),
-          let latest, let threadUpdatedAt,
-          latest.author != viewerLogin,
-          abs(threadUpdatedAt.timeIntervalSince(latest.createdAt)) <= commentTriggerWindow else { return nil }
-    // GitHub serves a bot's avatar at its stripped login, not the "[bot]" form,
-    // so use the display name for both the caption and the avatar.
-    let name = displayLogin(latest.author)
-    return MentionAttribution(reason: "\(name) commented", avatarLogin: name)
+// The newest comment as the thread's latest event, or nil to keep the state
+// caption. Only a recent comment by someone other than the viewer counts;
+// "mentioned you" only when the comment actually @-mentions the viewer.
+public func commentEventAttribution(viewerLogin: String?, comment: DatedComment?,
+                                    threadUpdatedAt: Date?) -> MentionAttribution? {
+    guard let viewerLogin, let comment, let threadUpdatedAt,
+          comment.author != viewerLogin,
+          abs(threadUpdatedAt.timeIntervalSince(comment.createdAt)) <= commentTriggerWindow else { return nil }
+    let name = displayLogin(comment.author)
+    let verb = comment.mentionsViewer ? "mentioned you" : "commented"
+    return MentionAttribution(reason: "\(name) \(verb)", avatarLogin: name)
 }
 
 // The more recent of two optional comments, or whichever one is present.
@@ -164,26 +152,6 @@ public func isOwnLatestActivity(viewerLogin: String?, latestComment: DatedCommen
           actor.author == viewerLogin,
           abs(threadUpdatedAt.timeIntervalSince(actor.at)) <= selfActivityWindow else { return false }
     return true
-}
-
-// Comments must be in chronological (oldest-first) order. For a mention, prefer
-// the latest comment that still @-mentions the viewer; the triggering mention
-// is often gone (bots edit their comments, or it lived in the PR body), so fall
-// back to the most recent commenter as a best-effort actor. nil only when there
-// are no comments or the reason is not actor-worthy.
-public func mentioner(in comments: [CommentSummary], rawReason: String, viewerLogin: String?) -> String? {
-    switch rawReason {
-    case "mention":
-        if let viewer = viewerLogin,
-           let mentioned = comments.last(where: { bodyMentions($0.body, login: viewer) }) {
-            return mentioned.author
-        }
-        return comments.last?.author
-    case "team_mention", "comment":
-        return comments.last?.author
-    default:
-        return nil
-    }
 }
 
 // True when body contains "@login" as a whole handle, not as a prefix of a
