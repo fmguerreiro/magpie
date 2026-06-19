@@ -131,6 +131,41 @@ public func reviewEventAttribution(viewerLogin: String?, latestComment: DatedCom
     return MentionAttribution(reason: "\(name) \(verb)", avatarLogin: name)
 }
 
+// The author and time of the more recent of a thread's latest comment and review.
+public func mostRecentActor(comment: DatedComment?, review: DatedReview?) -> (author: String, at: Date)? {
+    let commentActor = comment.map { (author: $0.author, at: $0.createdAt) }
+    let reviewActor = review.map { (author: $0.author, at: $0.createdAt) }
+    switch (commentActor, reviewActor) {
+    case let (commentActor?, reviewActor?): return commentActor.at >= reviewActor.at ? commentActor : reviewActor
+    case let (commentActor?, nil): return commentActor
+    case let (nil, reviewActor?): return reviewActor
+    case (nil, nil): return nil
+    }
+}
+
+// Suppression marks the thread read on GitHub, so it uses a tighter window than
+// the caption: only the viewer's action essentially at the thread's last change
+// counts as having caused it. We cannot see non-comment bumps (CI, labels,
+// assignments), so a wider window would risk clearing a real notification that a
+// later non-comment event raised after the viewer's own comment.
+public let selfActivityWindow: TimeInterval = 120
+
+// True when the thread's most recent action is the viewer's own, so they have
+// already seen it and need no notification: they merged their own PR, or their
+// comment/review is the latest action right at the thread's last change. Someone
+// else's action, even if older than the viewer's latest comment, keeps the
+// thread (they may not have seen it).
+public func isOwnLatestActivity(viewerLogin: String?, latestComment: DatedComment?,
+                                latestReview: DatedReview?, threadUpdatedAt: Date?,
+                                mergedByViewer: Bool) -> Bool {
+    guard let viewerLogin else { return false }
+    if mergedByViewer { return true }
+    guard let threadUpdatedAt, let actor = mostRecentActor(comment: latestComment, review: latestReview),
+          actor.author == viewerLogin,
+          abs(threadUpdatedAt.timeIntervalSince(actor.at)) <= selfActivityWindow else { return false }
+    return true
+}
+
 // Comments must be in chronological (oldest-first) order. For a mention, prefer
 // the latest comment that still @-mentions the viewer; the triggering mention
 // is often gone (bots edit their comments, or it lived in the PR body), so fall
