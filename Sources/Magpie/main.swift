@@ -319,6 +319,16 @@ struct GHPullRequestInfo: Decodable {
     let author: GHAuthor?
 }
 
+struct GHReviewDetail: Decodable {
+    let user: GHAuthor
+    let state: String
+    let submitted_at: String?
+
+    var submittedAt: Date? {
+        submitted_at.flatMap { GHThread.timestampFormatter.date(from: $0) }
+    }
+}
+
 struct GHIssueInfo: Decodable {
     let state: String
     let stateReason: String?
@@ -376,26 +386,26 @@ final class GitHubAdapter: NotificationAdapter {
             runCommand(ghPath, ["pr", "view", url, "--json", "state,isDraft,reviewDecision,author"]) { result in
                 guard case .success(let data) = result,
                       let info = try? JSONDecoder().decode(GHPullRequestInfo.self, from: data) else {
-                    // State fetch failed; still try to name the mentioner.
-                    self.resolveActorOrCommenter(item, completion: completion)
+                    // State fetch failed; still try to surface the latest event.
+                    self.resolveLatestEvent(item, completion: completion)
                     return
                 }
                 var updated = item
                 updated.status = Self.status(forPullRequest: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                self.resolveActorOrCommenter(updated, completion: completion)
+                self.resolveLatestEvent(updated, completion: completion)
             }
         case .issue:
             runCommand(ghPath, ["issue", "view", url, "--json", "state,stateReason,author"]) { result in
                 guard case .success(let data) = result,
                       let info = try? JSONDecoder().decode(GHIssueInfo.self, from: data) else {
-                    self.resolveActorOrCommenter(item, completion: completion)
+                    self.resolveLatestEvent(item, completion: completion)
                     return
                 }
                 var updated = item
                 updated.status = Self.status(forIssue: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                self.resolveActorOrCommenter(updated, completion: completion)
+                self.resolveLatestEvent(updated, completion: completion)
             }
         default:
             // Commits, releases, discussions etc. carry no PR/issue state to enrich.
@@ -408,59 +418,97 @@ final class GitHubAdapter: NotificationAdapter {
     // PR/issue author's. Other reasons pass through untouched.
     private static let actorReasons: Set<String> = ["mention", "team_mention", "comment"]
 
-    private func resolveActorOrCommenter(_ item: Item, completion: @escaping (Item) -> Void) {
+    // Caption the thread by its most recent actor action. A review that is the
+    // latest event ("ryukez approved") wins over the subscription reason; failing
+    // that, fall back to the mention/commenter/state caption with the comment
+    // already fetched here so it is not fetched twice.
+    private func resolveLatestEvent(_ item: Item, completion: @escaping (Item) -> Void) {
+        fetchItemNewestComment(item) { comment in
+            self.fetchLatestReview(item) { review in
+                if let attribution = reviewEventAttribution(
+                        viewerLogin: self.viewerLogin, latestComment: comment,
+                        latestReview: review, threadUpdatedAt: item.updatedAt) {
+                    completion(self.applying(attribution, to: item))
+                    return
+                }
+                self.resolveActorOrCommenter(item, prefetchedComment: comment, completion: completion)
+            }
+        }
+    }
+
+    private func resolveActorOrCommenter(_ item: Item, prefetchedComment: DatedComment?,
+                                         completion: @escaping (Item) -> Void) {
         guard let raw = item.rawReason else { completion(item); return }
         if Self.actorReasons.contains(raw) {
             resolveActor(item, completion: completion)
         } else if reasonsSupersededByState.contains(raw) {
-            resolveCommenter(item, completion: completion)
+            guard let attribution = recentCommenterAttribution(
+                      rawReason: raw, viewerLogin: viewerLogin,
+                      latest: prefetchedComment, threadUpdatedAt: item.updatedAt) else {
+                completion(item)
+                return
+            }
+            completion(applying(attribution, to: item))
         } else {
             completion(item)
         }
     }
 
-    // GitHub omits latest_comment_url for authored threads, so fetch the newest
-    // conversation and review comment directly and let recentCommenterAttribution
-    // decide whether one is the trigger worth surfacing.
-    private func resolveCommenter(_ item: Item, completion: @escaping (Item) -> Void) {
-        guard let webURL = item.url else { completion(item); return }
-        let issue = issueCommentsEndpoint(forWebURL: webURL)
-        let review = reviewCommentsEndpoint(forWebURL: webURL)
-        guard issue != nil || review != nil else { completion(item); return }
-        fetchNewestComment(issue) { issueComment in
-            self.fetchNewestComment(review) { reviewComment in
-                guard let attribution = recentCommenterAttribution(
-                          rawReason: item.rawReason, viewerLogin: self.viewerLogin,
-                          latest: newer(issueComment, reviewComment),
-                          threadUpdatedAt: item.updatedAt) else {
-                    completion(item)
-                    return
-                }
-                var updated = item
-                updated.reason = attribution.reason
-                if let avatarLogin = attribution.avatarLogin {
-                    updated.avatarURL = Self.avatarURL(avatarLogin)
-                }
-                completion(updated)
+    private func applying(_ attribution: MentionAttribution, to item: Item) -> Item {
+        var updated = item
+        updated.reason = attribution.reason
+        if let avatarLogin = attribution.avatarLogin {
+            updated.avatarURL = Self.avatarURL(avatarLogin)
+        }
+        return updated
+    }
+
+    // The newest comment across a thread's conversation and review-comment
+    // endpoints, or nil when neither applies or both fail.
+    private func fetchItemNewestComment(_ item: Item, completion: @escaping (DatedComment?) -> Void) {
+        guard let webURL = item.url else { completion(nil); return }
+        fetchNewestComment(issueCommentsEndpoint(forWebURL: webURL)) { issueComment in
+            self.fetchNewestComment(reviewCommentsEndpoint(forWebURL: webURL)) { reviewComment in
+                completion(newer(issueComment, reviewComment))
             }
+        }
+    }
+
+    // The latest submitted review on a PR, or nil for issues / on failure.
+    private func fetchLatestReview(_ item: Item, completion: @escaping (DatedReview?) -> Void) {
+        guard item.kind == .pullRequest, let webURL = item.url,
+              let endpoint = reviewsEndpoint(forWebURL: webURL) else { completion(nil); return }
+        fetchAll(endpoint, as: GHReviewDetail.self) { reviews in
+            let dated = reviews.compactMap { review in
+                review.submittedAt.map { DatedReview(author: review.user.login, state: review.state, createdAt: $0) }
+            }
+            completion(dated.max { $0.createdAt < $1.createdAt })
         }
     }
 
     // Best-effort: nil when the endpoint is absent or the request fails.
     private func fetchNewestComment(_ endpoint: String?, completion: @escaping (DatedComment?) -> Void) {
         guard let endpoint else { completion(nil); return }
+        fetchAll(endpoint, as: GHCommentDetail.self) { comments in
+            let dated = comments.compactMap { comment in
+                comment.createdAt.map { DatedComment(author: comment.user.login, createdAt: $0) }
+            }
+            completion(newestComment(in: dated))
+        }
+    }
+
+    // Every row from a paginated gh api list endpoint, or [] on failure.
+    private func fetchAll<T: Decodable>(_ endpoint: String, as type: T.Type,
+                                        completion: @escaping ([T]) -> Void) {
         // --slurp wraps each page in an outer array; without it --paginate
         // concatenates raw arrays into invalid JSON.
         runCommand(ghPath, ["api", "--slurp", "--paginate", endpoint]) { result in
             guard case .success(let data) = result,
-                  let pages = try? JSONDecoder().decode([[GHCommentDetail]].self, from: data) else {
-                completion(nil)
+                  let pages = try? JSONDecoder().decode([[T]].self, from: data) else {
+                completion([])
                 return
             }
-            let dated = pages.flatMap { $0 }.compactMap { comment in
-                comment.createdAt.map { DatedComment(author: comment.user.login, createdAt: $0) }
-            }
-            completion(newestComment(in: dated))
+            completion(pages.flatMap { $0 })
         }
     }
 
