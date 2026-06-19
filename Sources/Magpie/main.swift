@@ -162,6 +162,9 @@ struct Item: Identifiable {
     var rawReason: String? = nil
     // GitHub API URL of the comment that triggered this notification, if any.
     var latestCommentURL: String? = nil
+    // Set during enrichment when the thread's latest action is the viewer's own;
+    // the store marks it read on GitHub and drops it instead of displaying it.
+    var suppressed: Bool = false
 
     var displaySymbol: String {
         if let status { return status.symbol }
@@ -317,6 +320,7 @@ struct GHPullRequestInfo: Decodable {
     let isDraft: Bool
     let reviewDecision: String?
     let author: GHAuthor?
+    let mergedBy: GHAuthor?
 }
 
 struct GHReviewDetail: Decodable {
@@ -383,29 +387,31 @@ final class GitHubAdapter: NotificationAdapter {
         guard let url = item.url?.absoluteString else { return }
         switch item.kind {
         case .pullRequest:
-            runCommand(ghPath, ["pr", "view", url, "--json", "state,isDraft,reviewDecision,author"]) { result in
+            runCommand(ghPath, ["pr", "view", url, "--json", "state,isDraft,reviewDecision,author,mergedBy"]) { result in
                 guard case .success(let data) = result,
                       let info = try? JSONDecoder().decode(GHPullRequestInfo.self, from: data) else {
                     // State fetch failed; still try to surface the latest event.
-                    self.resolveLatestEvent(item, completion: completion)
+                    self.resolveLatestEvent(item, mergedByViewer: false, completion: completion)
                     return
                 }
                 var updated = item
                 updated.status = Self.status(forPullRequest: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                self.resolveLatestEvent(updated, completion: completion)
+                let mergedByViewer = info.state.uppercased() == "MERGED"
+                    && info.mergedBy?.login == self.viewerLogin
+                self.resolveLatestEvent(updated, mergedByViewer: mergedByViewer, completion: completion)
             }
         case .issue:
             runCommand(ghPath, ["issue", "view", url, "--json", "state,stateReason,author"]) { result in
                 guard case .success(let data) = result,
                       let info = try? JSONDecoder().decode(GHIssueInfo.self, from: data) else {
-                    self.resolveLatestEvent(item, completion: completion)
+                    self.resolveLatestEvent(item, mergedByViewer: false, completion: completion)
                     return
                 }
                 var updated = item
                 updated.status = Self.status(forIssue: info)
                 if let login = info.author?.login { updated.avatarURL = Self.avatarURL(login) }
-                self.resolveLatestEvent(updated, completion: completion)
+                self.resolveLatestEvent(updated, mergedByViewer: false, completion: completion)
             }
         default:
             // Commits, releases, discussions etc. carry no PR/issue state to enrich.
@@ -418,13 +424,23 @@ final class GitHubAdapter: NotificationAdapter {
     // PR/issue author's. Other reasons pass through untouched.
     private static let actorReasons: Set<String> = ["mention", "team_mention", "comment"]
 
-    // Caption the thread by its most recent actor action. A review that is the
-    // latest event ("ryukez approved") wins over the subscription reason; failing
-    // that, fall back to the mention/commenter/state caption with the comment
-    // already fetched here so it is not fetched twice.
-    private func resolveLatestEvent(_ item: Item, completion: @escaping (Item) -> Void) {
+    // Caption the thread by its most recent actor action, or suppress it when that
+    // action is the viewer's own. A review that is the latest event ("ryukez
+    // approved") wins over the subscription reason; failing that, fall back to the
+    // mention/commenter/state caption with the comment already fetched here so it
+    // is not fetched twice.
+    private func resolveLatestEvent(_ item: Item, mergedByViewer: Bool,
+                                    completion: @escaping (Item) -> Void) {
         fetchItemNewestComment(item) { comment in
             self.fetchLatestReview(item) { review in
+                if isOwnLatestActivity(viewerLogin: self.viewerLogin, latestComment: comment,
+                                       latestReview: review, threadUpdatedAt: item.updatedAt,
+                                       mergedByViewer: mergedByViewer) {
+                    var suppressed = item
+                    suppressed.suppressed = true
+                    completion(suppressed)
+                    return
+                }
                 if let attribution = reviewEventAttribution(
                         viewerLogin: self.viewerLogin, latestComment: comment,
                         latestReview: review, threadUpdatedAt: item.updatedAt) {
@@ -881,7 +897,14 @@ final class Store: ObservableObject {
     private func enrichAll() {
         for item in items {
             adapter(for: item.source)?.enrich(item) { [weak self] updated in
-                guard let self, let index = self.items.firstIndex(where: { $0.id == updated.id }) else { return }
+                guard let self else { return }
+                // The latest action is the viewer's own, so clear it on GitHub and
+                // drop it rather than showing a notification they already know about.
+                if updated.suppressed {
+                    self.markRead(updated)
+                    return
+                }
+                guard let index = self.items.firstIndex(where: { $0.id == updated.id }) else { return }
                 self.items[index] = updated
             }
         }

@@ -211,3 +211,71 @@ private let threadUpdated = Date(timeIntervalSince1970: 1_000_000)
     #expect(reviewsEndpoint(forWebURL: URL(string: "https://github.com/octo/repo/pull/42")!) == "repos/octo/repo/pulls/42/reviews")
     #expect(reviewsEndpoint(forWebURL: URL(string: "https://github.com/octo/repo/issues/42")!) == nil)
 }
+
+@Test func suppressesAThreadTheViewerMerged() {
+    #expect(isOwnLatestActivity(viewerLogin: "me", latestComment: nil, latestReview: nil,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: true) == true)
+}
+
+@Test func suppressesAThreadWhoseLatestActionIsTheViewersComment() {
+    let mine = DatedComment(author: "me", createdAt: threadUpdated.addingTimeInterval(-10))
+    #expect(isOwnLatestActivity(viewerLogin: "me", latestComment: mine, latestReview: nil,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: false) == true)
+}
+
+@Test func suppressesAThreadWhoseLatestActionIsTheViewersReview() {
+    let myReview = DatedReview(author: "me", state: "APPROVED", createdAt: threadUpdated.addingTimeInterval(-10))
+    let older = DatedComment(author: "ryukez", createdAt: threadUpdated.addingTimeInterval(-200))
+    #expect(isOwnLatestActivity(viewerLogin: "me", latestComment: older, latestReview: myReview,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: false) == true)
+}
+
+// Someone else's action, even if older than the viewer's latest comment, keeps
+// the thread: they replied after a mention the viewer hasn't acted on.
+@Test func keepsAThreadWhoseLatestActionIsSomeoneElse() {
+    let theirs = DatedComment(author: "ryukez", createdAt: threadUpdated.addingTimeInterval(-10))
+    let mine = DatedComment(author: "me", createdAt: threadUpdated.addingTimeInterval(-200))
+    #expect(isOwnLatestActivity(viewerLogin: "me", latestComment: newer(theirs, mine), latestReview: nil,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: false) == false)
+}
+
+// The viewer's comment from long ago was not what bumped the thread (a CI run or
+// someone else's non-comment action was), so keep it visible.
+@Test func keepsAThreadWhenTheViewersCommentIsOutsideTheWindow() {
+    let mine = DatedComment(author: "me", createdAt: threadUpdated.addingTimeInterval(-3600))
+    #expect(isOwnLatestActivity(viewerLogin: "me", latestComment: mine, latestReview: nil,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: false) == false)
+}
+
+@Test func keepsAThreadWithNoActorActivityAndNoSelfMerge() {
+    #expect(isOwnLatestActivity(viewerLogin: "me", latestComment: nil, latestReview: nil,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: false) == false)
+}
+
+// A bump well after the viewer's comment was a non-comment event (CI, label) we
+// cannot see, so suppression's tight window keeps the thread rather than clear it.
+@Test func keepsAThreadBumpedWellAfterTheViewersComment() {
+    let mine = DatedComment(author: "me", createdAt: threadUpdated.addingTimeInterval(-180))
+    #expect(isOwnLatestActivity(viewerLogin: "me", latestComment: mine, latestReview: nil,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: false) == false)
+}
+
+// Without a known viewer we cannot claim an action is theirs, even a merge.
+@Test func neverSuppressesWhenTheViewerIsUnknown() {
+    #expect(isOwnLatestActivity(viewerLogin: nil, latestComment: nil, latestReview: nil,
+                                threadUpdatedAt: threadUpdated, mergedByViewer: true) == false)
+}
+
+@Test func breaksATieBetweenCommentAndReviewTowardTheComment() {
+    let comment = DatedComment(author: "alice", createdAt: threadUpdated)
+    let review = DatedReview(author: "bob", state: "APPROVED", createdAt: threadUpdated)
+    #expect(mostRecentActor(comment: comment, review: review)?.author == "alice")
+}
+
+@Test func picksTheMoreRecentOfACommentAndReview() {
+    let comment = DatedComment(author: "alice", createdAt: threadUpdated.addingTimeInterval(-10))
+    let review = DatedReview(author: "bob", state: "APPROVED", createdAt: threadUpdated.addingTimeInterval(-100))
+    #expect(mostRecentActor(comment: comment, review: review)?.author == "alice")
+    #expect(mostRecentActor(comment: nil, review: review)?.author == "bob")
+    #expect(mostRecentActor(comment: nil, review: nil) == nil)
+}
