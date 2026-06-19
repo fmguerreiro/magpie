@@ -113,6 +113,19 @@ private let threadUpdated = Date(timeIntervalSince1970: 1_000_000)
     #expect(newer(tieFirst, tieSecond) == tieFirst)
 }
 
+@Test func picksTheLatestCommentRegardlessOfBatchOrder() {
+    let comments = [
+        DatedComment(author: "alice", createdAt: threadUpdated.addingTimeInterval(-300)),
+        DatedComment(author: "bob", createdAt: threadUpdated.addingTimeInterval(-10)),
+        DatedComment(author: "carol", createdAt: threadUpdated.addingTimeInterval(-120)),
+    ]
+    #expect(newestComment(in: comments) == comments[1])
+}
+
+@Test func returnsNilForAnEmptyCommentBatch() {
+    #expect(newestComment(in: []) == nil)
+}
+
 @Test func doesNotSurfaceTheViewersOwnComment() {
     let comment = DatedComment(author: "fmguerreiro", createdAt: threadUpdated.addingTimeInterval(-21))
     #expect(recentCommenterAttribution(rawReason: "author", viewerLogin: "fmguerreiro",

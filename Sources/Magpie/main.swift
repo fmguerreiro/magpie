@@ -446,19 +446,21 @@ final class GitHubAdapter: NotificationAdapter {
         }
     }
 
-    // An endpoint's single newest comment, or nil when the endpoint is absent,
-    // the request fails, or the comment carries no parseable timestamp. sort and
-    // per_page bound the response to one row.
+    // Best-effort: nil when the endpoint is absent or the request fails.
     private func fetchNewestComment(_ endpoint: String?, completion: @escaping (DatedComment?) -> Void) {
         guard let endpoint else { completion(nil); return }
-        runCommand(ghPath, ["api", "\(endpoint)?per_page=1&sort=created&direction=desc"]) { result in
+        // --slurp wraps each page in an outer array; without it --paginate
+        // concatenates raw arrays into invalid JSON.
+        runCommand(ghPath, ["api", "--slurp", "--paginate", endpoint]) { result in
             guard case .success(let data) = result,
-                  let comments = try? JSONDecoder().decode([GHCommentDetail].self, from: data),
-                  let newest = comments.first, let createdAt = newest.createdAt else {
+                  let pages = try? JSONDecoder().decode([[GHCommentDetail]].self, from: data) else {
                 completion(nil)
                 return
             }
-            completion(DatedComment(author: newest.user.login, createdAt: createdAt))
+            let dated = pages.flatMap { $0 }.compactMap { comment in
+                comment.createdAt.map { DatedComment(author: comment.user.login, createdAt: $0) }
+            }
+            completion(newestComment(in: dated))
         }
     }
 
