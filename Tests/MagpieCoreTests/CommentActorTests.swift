@@ -150,3 +150,64 @@ private let threadUpdated = Date(timeIntervalSince1970: 1_000_000)
     #expect(recentCommenterAttribution(rawReason: "author", viewerLogin: "fmguerreiro",
                                        latest: nil, threadUpdatedAt: threadUpdated) == nil)
 }
+
+@Test func surfacesAReviewAsTheLatestEvent() {
+    let approval = DatedReview(author: "ryukez", state: "APPROVED", createdAt: threadUpdated.addingTimeInterval(-30))
+    #expect(reviewEventAttribution(viewerLogin: "fmguerreiro", latestComment: nil,
+                                   latestReview: approval, threadUpdatedAt: threadUpdated)
+            == MentionAttribution(reason: "ryukez approved", avatarLogin: "ryukez"))
+}
+
+@Test func mapsEachSurfacedReviewState() {
+    func caption(_ state: String) -> String? {
+        let review = DatedReview(author: "ryukez", state: state, createdAt: threadUpdated)
+        return reviewEventAttribution(viewerLogin: "me", latestComment: nil,
+                                      latestReview: review, threadUpdatedAt: threadUpdated)?.reason
+    }
+    #expect(caption("APPROVED") == "ryukez approved")
+    #expect(caption("CHANGES_REQUESTED") == "ryukez requested changes")
+    #expect(caption("COMMENTED") == "ryukez reviewed")
+    #expect(caption("DISMISSED") == nil)
+    #expect(caption("PENDING") == nil)
+}
+
+// A comment newer than the review is the actual latest event, so the review yields.
+@Test func defersToACommentNewerThanTheReview() {
+    let review = DatedReview(author: "ryukez", state: "APPROVED", createdAt: threadUpdated.addingTimeInterval(-120))
+    let comment = DatedComment(author: "octocat", createdAt: threadUpdated.addingTimeInterval(-10))
+    #expect(reviewEventAttribution(viewerLogin: "me", latestComment: comment,
+                                   latestReview: review, threadUpdatedAt: threadUpdated) == nil)
+}
+
+// On a tie the review is the more specific action, so it wins over the comment.
+@Test func keepsTheReviewWhenACommentTiesItsTimestamp() {
+    let review = DatedReview(author: "ryukez", state: "APPROVED", createdAt: threadUpdated)
+    let comment = DatedComment(author: "octocat", createdAt: threadUpdated)
+    #expect(reviewEventAttribution(viewerLogin: "me", latestComment: comment,
+                                   latestReview: review, threadUpdatedAt: threadUpdated)
+            == MentionAttribution(reason: "ryukez approved", avatarLogin: "ryukez"))
+}
+
+@Test func doesNotSurfaceTheViewersOwnReview() {
+    let review = DatedReview(author: "me", state: "APPROVED", createdAt: threadUpdated.addingTimeInterval(-30))
+    #expect(reviewEventAttribution(viewerLogin: "me", latestComment: nil,
+                                   latestReview: review, threadUpdatedAt: threadUpdated) == nil)
+}
+
+@Test func ignoresAReviewFarFromTheThreadsLastChange() {
+    let review = DatedReview(author: "ryukez", state: "APPROVED", createdAt: threadUpdated.addingTimeInterval(-3600))
+    #expect(reviewEventAttribution(viewerLogin: "me", latestComment: nil,
+                                   latestReview: review, threadUpdatedAt: threadUpdated) == nil)
+}
+
+@Test func stripsABotSuffixFromAReviewerName() {
+    let review = DatedReview(author: "cubic-dev-ai[bot]", state: "APPROVED", createdAt: threadUpdated)
+    #expect(reviewEventAttribution(viewerLogin: "me", latestComment: nil,
+                                   latestReview: review, threadUpdatedAt: threadUpdated)
+            == MentionAttribution(reason: "cubic-dev-ai approved", avatarLogin: "cubic-dev-ai"))
+}
+
+@Test func buildsTheReviewsEndpointForAPullRequest() {
+    #expect(reviewsEndpoint(forWebURL: URL(string: "https://github.com/octo/repo/pull/42")!) == "repos/octo/repo/pulls/42/reviews")
+    #expect(reviewsEndpoint(forWebURL: URL(string: "https://github.com/octo/repo/issues/42")!) == nil)
+}

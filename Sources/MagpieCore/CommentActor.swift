@@ -17,19 +17,25 @@ public struct CommentSummary: Equatable {
 // PR conversation comments live under the issues endpoint, which is where an
 // @-mention in the timeline lands. nil when the URL is not a PR/issue.
 public func issueCommentsEndpoint(forWebURL url: URL) -> String? {
-    commentsEndpoint(forWebURL: url, webKinds: ["pull", "issues"], apiSegment: "issues")
+    apiEndpoint(forWebURL: url, webKinds: ["pull", "issues"], apiSegment: "issues", suffix: "comments")
 }
 
 // Inline PR review comments live under the pulls endpoint, separate from the
 // conversation comments above. nil for issues and non-PR/issue URLs.
 public func reviewCommentsEndpoint(forWebURL url: URL) -> String? {
-    commentsEndpoint(forWebURL: url, webKinds: ["pull"], apiSegment: "pulls")
+    apiEndpoint(forWebURL: url, webKinds: ["pull"], apiSegment: "pulls", suffix: "comments")
 }
 
-private func commentsEndpoint(forWebURL url: URL, webKinds: Set<String>, apiSegment: String) -> String? {
+// PR reviews (approve / request changes / comment) live under the pulls
+// endpoint. nil for issues and non-PR URLs.
+public func reviewsEndpoint(forWebURL url: URL) -> String? {
+    apiEndpoint(forWebURL: url, webKinds: ["pull"], apiSegment: "pulls", suffix: "reviews")
+}
+
+private func apiEndpoint(forWebURL url: URL, webKinds: Set<String>, apiSegment: String, suffix: String) -> String? {
     let parts = url.pathComponents.filter { $0 != "/" }
     guard parts.count >= 4, webKinds.contains(parts[2]), Int(parts[3]) != nil else { return nil }
-    return "repos/\(parts[0])/\(parts[1])/\(apiSegment)/\(parts[3])/comments"
+    return "repos/\(parts[0])/\(parts[1])/\(apiSegment)/\(parts[3])/\(suffix)"
 }
 
 public struct DatedComment: Equatable {
@@ -86,6 +92,43 @@ public func newer(_ first: DatedComment?, _ second: DatedComment?) -> DatedComme
 // through all of them and picks the latest here rather than trusting the server.
 public func newestComment(in comments: [DatedComment]) -> DatedComment? {
     comments.max { $0.createdAt < $1.createdAt }
+}
+
+public struct DatedReview: Equatable {
+    public let author: String
+    public let state: String
+    public let createdAt: Date
+
+    public init(author: String, state: String, createdAt: Date) {
+        self.author = author
+        self.state = state
+        self.createdAt = createdAt
+    }
+}
+
+// nil for PENDING (unsubmitted) and DISMISSED (retraction).
+func reviewVerb(_ state: String) -> String? {
+    switch state.uppercased() {
+    case "APPROVED": return "approved"
+    case "CHANGES_REQUESTED": return "requested changes"
+    case "COMMENTED": return "reviewed"
+    default: return nil
+    }
+}
+
+// A review surfaced as the latest event ("ryukez approved"), or nil to leave the
+// caption alone. A review wins only when it is the most recent actor action on
+// the thread: a captionable state, within the trigger window, not the viewer's
+// own, and no comment newer than it (a later comment is the actual latest event).
+public func reviewEventAttribution(viewerLogin: String?, latestComment: DatedComment?,
+                                   latestReview: DatedReview?, threadUpdatedAt: Date?) -> MentionAttribution? {
+    guard let review = latestReview, let threadUpdatedAt,
+          let verb = reviewVerb(review.state),
+          review.author != viewerLogin,
+          abs(threadUpdatedAt.timeIntervalSince(review.createdAt)) <= commentTriggerWindow else { return nil }
+    if let comment = latestComment, comment.createdAt > review.createdAt { return nil }
+    let name = displayLogin(review.author)
+    return MentionAttribution(reason: "\(name) \(verb)", avatarLogin: name)
 }
 
 // Comments must be in chronological (oldest-first) order. For a mention, prefer
