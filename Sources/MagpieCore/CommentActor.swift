@@ -81,6 +81,13 @@ public func newer(_ first: DatedComment?, _ second: DatedComment?) -> DatedComme
     }
 }
 
+// The most recent comment in a batch, or nil if empty. The per-issue comments
+// endpoint ignores sort/direction and returns oldest-first, so the caller pages
+// through all of them and picks the latest here rather than trusting the server.
+public func newestComment(in comments: [DatedComment]) -> DatedComment? {
+    comments.max { $0.createdAt < $1.createdAt }
+}
+
 // Comments must be in chronological (oldest-first) order. For a mention, prefer
 // the latest comment that still @-mentions the viewer; the triggering mention
 // is often gone (bots edit their comments, or it lived in the PR body), so fall
