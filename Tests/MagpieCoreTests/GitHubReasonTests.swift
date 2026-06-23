@@ -33,3 +33,12 @@ import Testing
     #expect(captionBase(rawReason: nil, statusLabel: "In Progress", reason: "Yuki commented") == "Yuki commented")
     #expect(captionBase(rawReason: nil, statusLabel: "In Progress", reason: nil) == "In Progress")
 }
+
+// The resolved latest event is what pinged you, so it leads the caption even for a
+// reason that would otherwise lose to the state (an authored PR a reviewer touched).
+@Test func leadsWithTheResolvedEventOverStateAndReason() {
+    #expect(captionBase(eventCaption: "DrH97 reviewed", rawReason: "author",
+                        statusLabel: "open", reason: "your thread") == "DrH97 reviewed")
+    #expect(captionBase(eventCaption: "Sjlver approved", rawReason: "subscribed",
+                        statusLabel: "merged", reason: "subscribed") == "Sjlver approved")
+}

@@ -27,11 +27,17 @@ public let reasonsSupersededByState: Set<String> = ["author", "subscribed", "man
 
 // The leading text of a notification's caption, before the "5h ago" suffix.
 //
-// Event reasons (mention, review requested) are themselves the news, so they win.
-// Reasons vaguer than the thread state lose to a known state; the friendly reason
-// is only the fallback before enrichment has fetched that state. rawReason is nil
-// for non-GitHub sources, which keeps the plain "reason, else state" precedence.
-public func captionBase(rawReason: String?, statusLabel: String?, reason: String?) -> String? {
+// A concrete latest event ("Sjlver approved", "DrH97 reviewed") is what actually
+// pinged you, so it always wins: enrichment resolves it from the thread's newest
+// review/comment and it must not be masked by the thread's standing state.
+// Without one, event reasons (mention, review requested) are themselves the news
+// and win; reasons vaguer than the thread state lose to a known state, with the
+// friendly reason as the fallback before enrichment has fetched that state.
+// rawReason is nil for non-GitHub sources, keeping the plain "reason, else state"
+// precedence.
+public func captionBase(eventCaption: String? = nil, rawReason: String?,
+                        statusLabel: String?, reason: String?) -> String? {
+    if let eventCaption { return eventCaption }
     if let rawReason, reasonsSupersededByState.contains(rawReason) {
         return statusLabel ?? reason
     }
