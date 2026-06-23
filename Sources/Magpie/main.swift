@@ -1241,12 +1241,13 @@ struct DemoAdapter: NotificationAdapter {
 
     private static func gh(_ ref: String, _ group: String, _ title: String,
                            kind: SubjectKind, reason: String, status: ThreadStatus,
-                           login: String, age: TimeInterval, rawReason: String? = nil) -> Item {
+                           login: String, age: TimeInterval, rawReason: String? = nil,
+                           eventCaption: String? = nil) -> Item {
         Item(id: "demo:\(group)\(ref)", source: .github, group: group, title: title,
              url: URL(string: "https://github.com"), actionId: "demo:\(group)\(ref)",
              kind: kind, canMarkRead: true, reference: ref, reason: reason,
              status: status, avatarURL: avatar(login), updatedAt: ago(age),
-             rawReason: rawReason)
+             rawReason: rawReason, eventCaption: eventCaption)
     }
 
     private static func jira(_ key: String, _ title: String, reason: String,
@@ -1281,13 +1282,15 @@ struct DemoAdapter: NotificationAdapter {
            status: ThreadStatus(label: "merged", symbol: "arrow.triangle.merge", tint: .purple),
            login: "mojombo", age: 3 * 3600, rawReason: "review_requested"),
         gh("#51", "supabase/api", "Add per-route rate limiting", kind: .pullRequest,
-           reason: "octocat mentioned you",
+           reason: "mentioned you",
            status: ThreadStatus(label: "closed", symbol: "xmark.circle.fill", tint: .red),
-           login: "octocat", age: 6 * 3600, rawReason: "mention"),
+           login: "octocat", age: 6 * 3600, rawReason: "mention",
+           eventCaption: "octocat mentioned you"),
         gh("#44", "supabase/api", "Race condition in worker pool", kind: .issue,
-           reason: "kelseyhightower mentioned you",
+           reason: "mentioned you",
            status: ThreadStatus(label: "open", symbol: "smallcircle.filled.circle", tint: .green),
-           login: "kelseyhightower", age: 35 * 60, rawReason: "mention"),
+           login: "kelseyhightower", age: 35 * 60, rawReason: "mention",
+           eventCaption: "kelseyhightower mentioned you"),
         gh("#40", "supabase/api", "Memory leak on reconnect", kind: .issue,
            reason: "state changed",
            status: ThreadStatus(label: "closed", symbol: "checkmark.circle.fill", tint: .purple),
