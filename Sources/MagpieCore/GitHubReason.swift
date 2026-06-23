@@ -28,7 +28,9 @@ public func friendlyGitHubReason(_ raw: String) -> String {
 // fresh mention or comment still surfaces, because enrichment resolves it into an
 // eventCaption ("octocat mentioned you") that outranks the state; only the stale
 // label loses to it. For all of these the concrete state (open/closed/merged) is
-// the safer news, so the caption prefers it when known.
+// the safer news, so the caption prefers it when known. "review_requested" and
+// "assign" stay out: they are standing requests that remain true until you act on
+// them, so the reason still tells you to do something the state does not.
 public let reasonsSupersededByState: Set<String> = [
     "author", "subscribed", "manual", "state_change", "mention", "team_mention", "comment",
 ]
