@@ -682,7 +682,7 @@ final class JiraAdapter: NotificationAdapter {
             updated.status = Self.status(categoryKey: detail.fields.status?.statusCategory?.key,
                                          name: detail.fields.status?.name)
             let activity = Self.activity(from: detail)
-            updated.reason = activity?.text
+            updated.eventCaption = activity?.text
             // Prefer the avatar of whoever last acted; fall back to the assignee.
             if let actorAvatar = activity?.avatar {
                 updated.avatarURL = URL(string: actorAvatar)
