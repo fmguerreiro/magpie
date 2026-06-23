@@ -1281,8 +1281,6 @@ struct DemoAdapter: NotificationAdapter {
            reason: "review requested",
            status: ThreadStatus(label: "merged", symbol: "arrow.triangle.merge", tint: .purple),
            login: "mojombo", age: 3 * 3600, rawReason: "review_requested"),
-        // "mention" is superseded by state, so these rows need eventCaption (the
-        // post-enrichment actor caption) to surface the mention rather than the state.
         gh("#51", "supabase/api", "Add per-route rate limiting", kind: .pullRequest,
            reason: "mentioned you",
            status: ThreadStatus(label: "closed", symbol: "xmark.circle.fill", tint: .red),
