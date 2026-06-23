@@ -160,6 +160,10 @@ struct Item: Identifiable {
     // GitHub's raw reason ("mention", "comment", ...), used by captionBase to
     // decide whether the thread's state outranks the reason in the caption.
     var rawReason: String? = nil
+    // The thread's newest concrete event ("DrH97 reviewed", "octocat commented"),
+    // resolved during enrichment. It is what actually pinged you, so it leads the
+    // caption over the thread's standing reason and state.
+    var eventCaption: String? = nil
     // Set during enrichment when the thread's latest action is the viewer's own;
     // the store marks it read on GitHub and drops it instead of displaying it.
     var suppressed: Bool = false
@@ -177,7 +181,8 @@ struct Item: Identifiable {
     // suffixed with how long ago the notification last changed ("review requested 5h ago",
     // "closed 1h ago").
     var caption: String? {
-        let base = captionBase(rawReason: rawReason, statusLabel: status?.label, reason: reason)
+        let base = captionBase(eventCaption: eventCaption, rawReason: rawReason,
+                               statusLabel: status?.label, reason: reason)
         guard let base else { return updatedAt.map(relativeAge) }
         guard let updatedAt else { return base }
         return "\(base) \(relativeAge(updatedAt))"
@@ -452,7 +457,7 @@ final class GitHubAdapter: NotificationAdapter {
 
     private func applying(_ attribution: MentionAttribution, to item: Item) -> Item {
         var updated = item
-        updated.reason = attribution.reason
+        updated.eventCaption = attribution.reason
         if let avatarLogin = attribution.avatarLogin {
             updated.avatarURL = Self.avatarURL(avatarLogin)
         }

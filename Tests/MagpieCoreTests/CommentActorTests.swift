@@ -241,3 +241,24 @@ private let threadUpdated = Date(timeIntervalSince1970: 1_000_000)
     #expect(commentEventAttribution(viewerLogin: "fmguerreiro", comment: nil,
                                     threadUpdatedAt: threadUpdated) == nil)
 }
+
+// Regression for an authored PR captioned "open" while a reviewer had just acted
+// (HealthLearn/hl#3018): the review is resolved as the latest event, and that
+// event must lead the caption rather than being masked by the "author" reason's
+// preference for the thread state.
+@Test func captionsAnAuthoredPullRequestByItsReviewerNotTheState() {
+    let threadUpdatedAt = isoDate("2026-06-22T09:13:54Z")
+    let review = DatedReview(author: "DrH97", state: "COMMENTED",
+                             createdAt: isoDate("2026-06-22T09:13:33Z"))
+    let comment = DatedComment(author: "DrH97", createdAt: isoDate("2026-06-22T09:03:25Z"))
+    let event = reviewEventAttribution(viewerLogin: "fmguerreiro", latestComment: comment,
+                                       latestReview: review, threadUpdatedAt: threadUpdatedAt)
+    #expect(event == MentionAttribution(reason: "DrH97 reviewed", avatarLogin: "DrH97"))
+    #expect(captionBase(eventCaption: event?.reason, rawReason: "author",
+                        statusLabel: "open", reason: "your thread") == "DrH97 reviewed")
+}
+
+private func isoDate(_ string: String) -> Date {
+    let formatter = ISO8601DateFormatter()
+    return formatter.date(from: string)!
+}
