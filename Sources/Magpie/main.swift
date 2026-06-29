@@ -1352,7 +1352,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPanel() {
         if notificationPanel == nil {
-            let controller = NSHostingController(rootView: ContentView(store: sharedStore))
+            // ignoresSafeArea: the titled window keeps a transparent titlebar (for
+            // rounded corners + key status), and its safe-area inset would otherwise
+            // push the list down, leaving a tall empty strip above the header.
+            let controller = NSHostingController(rootView: ContentView(store: sharedStore).ignoresSafeArea())
             let panel = NSPanel(
                 contentRect: NSRect(x: 0, y: 0, width: 380, height: 300),
                 styleMask: [.titled, .fullSizeContentView],
