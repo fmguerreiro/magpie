@@ -1334,6 +1334,13 @@ let sharedStore = Store(adapters: makeAdapters())
 
 // MARK: - App delegate
 
+// A borderless NSPanel returns false for canBecomeKey by default, which leaves
+// it non-key: keyboard input dies and hidesOnDeactivate never fires (so it won't
+// dismiss on an outside click). Overriding restores popover-like behaviour.
+final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var notificationPanel: NSPanel?
 
@@ -1352,23 +1359,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPanel() {
         if notificationPanel == nil {
-            // ignoresSafeArea: the titled window keeps a transparent titlebar (for
-            // rounded corners + key status), and its safe-area inset would otherwise
-            // push the list down, leaving a tall empty strip above the header.
-            let controller = NSHostingController(rootView: ContentView(store: sharedStore).ignoresSafeArea())
-            let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 380, height: 300),
-                styleMask: [.titled, .fullSizeContentView],
+            // Borderless so the window is exactly the size of the SwiftUI content; a
+            // titled window adds titlebar height as an empty strip above or below the
+            // list. Rounded corners + the opaque background are applied here because a
+            // borderless window has no chrome to provide them.
+            let controller = NSHostingController(
+                rootView: ContentView(store: sharedStore)
+                    .background(Color(nsColor: .windowBackgroundColor))
+            )
+            let panel = KeyablePanel(
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 200),
+                styleMask: [.borderless, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             panel.contentViewController = controller
-            panel.titleVisibility = .hidden
-            panel.titlebarAppearsTransparent = true
-            panel.standardWindowButton(.closeButton)?.isHidden = true
-            panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-            panel.standardWindowButton(.zoomButton)?.isHidden = true
-            panel.isMovableByWindowBackground = false
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = true
+            controller.view.wantsLayer = true
+            controller.view.layer?.cornerRadius = 12
+            controller.view.layer?.masksToBounds = true
             panel.level = .floating
             // Clicking outside dismisses the panel, matching popover behaviour.
             panel.hidesOnDeactivate = true
