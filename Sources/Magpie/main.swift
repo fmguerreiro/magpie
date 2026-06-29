@@ -769,7 +769,7 @@ final class JiraAdapter: NotificationAdapter {
 // MARK: - Store
 
 final class Store: ObservableObject {
-    @Published var items: [Item] = []
+    @Published var items: [Item] = [] { didSet { publishCount() } }
     @Published var errorMessage: String?
     @Published var loading = false
 
@@ -782,6 +782,16 @@ final class Store: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+    }
+
+    // Mirror the unread count to a file so external bars (e.g. sketchybar, when
+    // the native menu-bar icon is hidden) can render their own indicator. Writes
+    // are best-effort: a status export must never take down the menu-bar app.
+    private func publishCount() {
+        let directory = NSString(string: "~/.config/magpie").expandingTildeInPath
+        let path = (directory as NSString).appendingPathComponent("count")
+        try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try? "\(items.count)".write(toFile: path, atomically: true, encoding: .utf8)
     }
 
     // GitHub groups first, then Jira; alphabetical within each.
