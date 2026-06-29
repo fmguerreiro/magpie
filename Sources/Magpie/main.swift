@@ -769,7 +769,7 @@ final class JiraAdapter: NotificationAdapter {
 // MARK: - Store
 
 final class Store: ObservableObject {
-    @Published var items: [Item] = []
+    @Published var items: [Item] = [] { didSet { publishCount() } }
     @Published var errorMessage: String?
     @Published var loading = false
 
@@ -782,6 +782,16 @@ final class Store: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+    }
+
+    // Mirror the unread count to a file so external bars (e.g. sketchybar, when
+    // the native menu-bar icon is hidden) can render their own indicator. Writes
+    // are best-effort: a status export must never take down the menu-bar app.
+    private func publishCount() {
+        let directory = NSString(string: "~/.config/magpie").expandingTildeInPath
+        let path = (directory as NSString).appendingPathComponent("count")
+        try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        try? "\(items.count)".write(toFile: path, atomically: true, encoding: .utf8)
     }
 
     // GitHub groups first, then Jira; alphabetical within each.
@@ -1318,8 +1328,91 @@ func makeAdapters() -> [NotificationAdapter] {
     return adapters
 }
 
+// Single store shared by the MenuBarExtra scene and the floating panel so both
+// show the same live data from one polling loop.
+let sharedStore = Store(adapters: makeAdapters())
+
+// MARK: - App delegate
+
+// A borderless NSPanel returns false for canBecomeKey by default, which leaves
+// it non-key: keyboard input dies and hidesOnDeactivate never fires (so it won't
+// dismiss on an outside click). Overriding restores popover-like behaviour.
+final class KeyablePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var notificationPanel: NSPanel?
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.contains(where: { $0.scheme == "magpie" }) else { return }
+        togglePanel()
+    }
+
+    func togglePanel() {
+        if let panel = notificationPanel, panel.isVisible {
+            panel.orderOut(nil)
+            return
+        }
+        showPanel()
+    }
+
+    private func showPanel() {
+        if notificationPanel == nil {
+            // Borderless so the window is exactly the size of the SwiftUI content; a
+            // titled window adds titlebar height as an empty strip above or below the
+            // list. Rounded corners + the opaque background are applied here because a
+            // borderless window has no chrome to provide them.
+            let controller = NSHostingController(
+                rootView: ContentView(store: sharedStore)
+                    .background(Color(nsColor: .windowBackgroundColor))
+            )
+            let panel = KeyablePanel(
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 200),
+                styleMask: [.borderless, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            panel.contentViewController = controller
+            panel.isOpaque = false
+            panel.backgroundColor = .clear
+            panel.hasShadow = true
+            controller.view.wantsLayer = true
+            controller.view.layer?.cornerRadius = 12
+            controller.view.layer?.masksToBounds = true
+            panel.level = .floating
+            // Clicking outside dismisses the panel, matching popover behaviour.
+            panel.hidesOnDeactivate = true
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.isReleasedWhenClosed = false
+            notificationPanel = panel
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        notificationPanel!.makeKeyAndOrderFront(nil)
+        positionPanel(notificationPanel!)
+    }
+
+    private func positionPanel(_ panel: NSPanel) {
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
+        guard let screen else { return }
+
+        let panelWidth = panel.frame.width
+        let screenMargin = 8.0
+        let idealLeft = mouseLocation.x - panelWidth / 2
+        let clampedLeft = max(screen.frame.minX + screenMargin,
+                              min(idealLeft, screen.frame.maxX - panelWidth - screenMargin))
+
+        // 32pt strip at the top is reserved for sketchybar.
+        let topEdge = screen.frame.maxY - 32
+        panel.setFrameTopLeftPoint(NSPoint(x: clampedLeft, y: topEdge))
+    }
+}
+
 struct MagpieApp: App {
-    @StateObject private var store = Store(adapters: makeAdapters())
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var store = sharedStore
 
     var body: some Scene {
         MenuBarExtra {
