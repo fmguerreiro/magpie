@@ -41,6 +41,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <string>13.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.filipeguerreiro.magpie</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>magpie</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

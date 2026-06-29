@@ -1318,8 +1318,77 @@ func makeAdapters() -> [NotificationAdapter] {
     return adapters
 }
 
+// Single store shared by the MenuBarExtra scene and the floating panel so both
+// show the same live data from one polling loop.
+let sharedStore = Store(adapters: makeAdapters())
+
+// MARK: - App delegate
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var notificationPanel: NSPanel?
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.contains(where: { $0.scheme == "magpie" }) else { return }
+        togglePanel()
+    }
+
+    func togglePanel() {
+        if let panel = notificationPanel, panel.isVisible {
+            panel.orderOut(nil)
+            return
+        }
+        showPanel()
+    }
+
+    private func showPanel() {
+        if notificationPanel == nil {
+            let controller = NSHostingController(rootView: ContentView(store: sharedStore))
+            let panel = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 380, height: 300),
+                styleMask: [.titled, .fullSizeContentView],
+                backing: .buffered,
+                defer: false
+            )
+            panel.contentViewController = controller
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+            panel.standardWindowButton(.closeButton)?.isHidden = true
+            panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            panel.standardWindowButton(.zoomButton)?.isHidden = true
+            panel.isMovableByWindowBackground = false
+            panel.level = .floating
+            // Clicking outside dismisses the panel, matching popover behaviour.
+            panel.hidesOnDeactivate = true
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.isReleasedWhenClosed = false
+            notificationPanel = panel
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        notificationPanel!.makeKeyAndOrderFront(nil)
+        positionPanel(notificationPanel!)
+    }
+
+    private func positionPanel(_ panel: NSPanel) {
+        let mouseLocation = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { NSMouseInRect(mouseLocation, $0.frame, false) } ?? NSScreen.main
+        guard let screen else { return }
+
+        let panelWidth = panel.frame.width
+        let screenMargin = 8.0
+        let idealLeft = mouseLocation.x - panelWidth / 2
+        let clampedLeft = max(screen.frame.minX + screenMargin,
+                              min(idealLeft, screen.frame.maxX - panelWidth - screenMargin))
+
+        // 32pt strip at the top is reserved for sketchybar.
+        let topEdge = screen.frame.maxY - 32
+        panel.setFrameTopLeftPoint(NSPoint(x: clampedLeft, y: topEdge))
+    }
+}
+
 struct MagpieApp: App {
-    @StateObject private var store = Store(adapters: makeAdapters())
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @StateObject private var store = sharedStore
 
     var body: some Scene {
         MenuBarExtra {
