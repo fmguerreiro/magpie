@@ -66,12 +66,43 @@ Copy `config.example.json` to `~/.config/magpie/config.json` and fill it in.
 `ghPath`/`jiraPath` are optional (the app probes the usual install dirs). Omit
 the whole `jira` block to run GitHub-only.
 
-For Jira, store the API token in the Keychain under the service name in your
-config (default `magpie-jira`):
+### Adding Jira
 
+The `jira` block enables the Jira adapter. It reads three fields (a fourth,
+`jql`, is optional):
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `site` | yes | Your Atlassian host, e.g. `your-org.atlassian.net` (no scheme). Issue links and the enrich REST calls are built from it. |
+| `email` | yes | The Atlassian account email. Used as the Keychain account and as the basic-auth username for enrich. |
+| `keychainService` | no | Keychain service name the API token is stored under. Defaults to `magpie-jira`. |
+| `jql` | no | Query for the issue list. Defaults to assigned-and-open OR watched-in-last-7-days OR reported-and-open. |
+
+```json
+"jira": {
+  "site": "your-org.atlassian.net",
+  "email": "you@example.com",
+  "keychainService": "magpie-jira"
+}
 ```
-security add-generic-password -a "you@example.com" -s magpie-jira -w 'YOUR_JIRA_API_TOKEN' -U
-```
+
+Setup is three steps:
+
+1. **Create an API token** at
+   [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+2. **Store it in the Keychain** under the same `email` and `keychainService`
+   the config uses — Magpie fetches it with
+   `security find-generic-password -a <email> -s <keychainService> -w` and
+   injects it into both `jira-cli` (as `JIRA_API_TOKEN`) and the enrich REST
+   calls:
+
+   ```
+   security add-generic-password -a "you@example.com" -s magpie-jira -w 'YOUR_JIRA_API_TOKEN' -U
+   ```
+
+3. **Initialize `jira-cli`** so `jira issue list` knows your site and login:
+   `jira init` (install via `brew install ankitpokhrel/jira-cli/jira-cli`).
+   Magpie shells out to this binary for the issue list.
 
 ## Install with Homebrew
 
